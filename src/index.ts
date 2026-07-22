@@ -1,5 +1,8 @@
-import { createInterface } from "node:readline/promises";
 import { Agent } from "./classes/Agent.js";
+import { EOF, ghostPrompt } from "./ui/lineEditor.js";
+
+/** Built-in slash commands, shown as ghost suggestions alongside skill names. */
+const BUILTIN_COMMANDS = ["help", "clear", "model", "exit", "quit"];
 
 function startSpinner(label = ""): () => void {
   const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -41,17 +44,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
   console.log('Ready. Type a message, or "/help" for commands.');
+
+  // Slash-command names offered as ghost completions: built-ins plus every skill.
+  const getCommands = (): string[] => [...BUILTIN_COMMANDS, ...agent.listSkillNames()];
 
   try {
     for (;;) {
-      let answer: string;
-      try {
-        answer = await rl.question("> ");
-      } catch {
-        break; // stdin closed (EOF / Ctrl+D) — exit cleanly instead of throwing
-      }
+      const answer = await ghostPrompt({ prompt: "> ", getCommands });
+      if (answer === EOF) break; 
       const line = answer.trim();
       if (line.length === 0) continue;
 
@@ -122,7 +123,7 @@ async function main(): Promise<void> {
       console.log(reply);
     }
   } finally {
-    rl.close();
+    if (process.stdin.isTTY) process.stdin.setRawMode(false);
   }
 }
 
