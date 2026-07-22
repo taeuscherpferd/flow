@@ -108,8 +108,30 @@ async function main(): Promise<void> {
           continue;
         }
 
-        const loaded = agent.loadSkillByName(cmd);
-        console.log(loaded ? `Loaded skill: ${cmd}` : `Unknown command or skill: /${cmd}`);
+        // Split "/<skill> <prompt...>" into the skill name and any trailing prompt.
+        const firstSpace = cmd.search(/\s/);
+        const skillName = firstSpace === -1 ? cmd : cmd.slice(0, firstSpace);
+        const promptText = firstSpace === -1 ? "" : cmd.slice(firstSpace + 1).trim();
+
+        const loaded = agent.loadSkillByName(skillName);
+        if (!loaded) {
+          console.log(`Unknown command or skill: /${skillName}`);
+          continue;
+        }
+
+        console.log(`Loaded skill: ${skillName}`);
+
+        // If a prompt followed the skill name, run it now with the skill in context.
+        if (promptText.length > 0) {
+          const stopSkillSpinner = startSpinner();
+          let skillReply: string;
+          try {
+            skillReply = await agent.handleUserMessage(promptText);
+          } finally {
+            stopSkillSpinner();
+          }
+          console.log(skillReply);
+        }
         continue;
       }
 
