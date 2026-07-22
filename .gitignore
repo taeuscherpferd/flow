@@ -1,0 +1,23 @@
+# Dependencies
+/node_modules
+/vendor
+
+# Build output
+/dist
+/build
+
+# Environment / Secrets
+.env
+*.local
+
+# Logs and temporary files
+npm-debug.log*
+yarn-debug.log*
+*.log
+
+# IDE Files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
