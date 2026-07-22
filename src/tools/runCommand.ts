@@ -5,7 +5,7 @@ import type { Tool } from "./types.js";
 const execAsync = promisify(exec);
 
 const TIMEOUT_MS = 30_000;
-const MAX_OUTPUT_CHARS = 20_000;
+const MAX_OUTPUT_CHARS = 500_000;
 
 interface ExecError extends Error {
   stdout?: string;
@@ -34,7 +34,7 @@ function formatOutput(stdout: string, stderr: string, exitCode: number | null): 
 export const runCommandTool: Tool = {
   name: "run_command",
   description:
-    "Execute a shell command and return its stdout, stderr, and exit code. Times out after 30 seconds; output is capped at 20KB.",
+    "Execute a shell command and return its stdout, stderr, and exit code. Times out after 30 seconds; output is capped at 500KB.",
   parameters: {
     type: "object",
     properties: {

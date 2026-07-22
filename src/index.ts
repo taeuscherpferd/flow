@@ -1,9 +1,33 @@
 import { createInterface } from "node:readline/promises";
 import { Agent } from "./classes/Agent.js";
 
+function startSpinner(label = ""): () => void {
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const interactive = process.stderr.isTTY === true;
+
+  if (!interactive) {
+    process.stderr.write(`${label}...\n`);
+    return () => {};
+  }
+
+  let i = 0;
+  process.stderr.write("\x1b[?25l"); // hide cursor
+  const timer = setInterval(() => {
+    process.stderr.write(`\r${frames[i % frames.length]} ${label}...`);
+    i += 1;
+  }, 80);
+
+  return () => {
+    clearInterval(timer);
+    process.stderr.write("\r\x1b[K"); 
+    process.stderr.write("\x1b[?25h"); // restore cursor
+  };
+}
+
 const HELP_TEXT = `Commands:
   /help            Show this help
   /clear           Clear the conversation context
+  /model [name]    List available models, or switch to <name>
   /exit, /quit     Exit the REPL
   /<skill-name>    Manually load a skill's full instructions into context`;
 
@@ -49,12 +73,52 @@ async function main(): Promise<void> {
           continue;
         }
 
+        if (cmd === "model" || cmd.startsWith("model ")) {
+          const requested = cmd.slice("model".length).trim();
+          const current = agent.getCurrentModel();
+          const available = agent.listModels();
+
+          if (requested.length === 0) {
+            console.log(`Current model: ${current.provider}/${current.model}`);
+            if (available.length === 0) {
+              console.log("No models configured. Add some to models.json.");
+            } else {
+              console.log("Available:");
+              for (const m of available) {
+                console.log(`  ${m.provider}/${m.model}${m.active ? "  (active)" : ""}`);
+              }
+              console.log('Switch with "/model <name>" or "/model <provider>/<name>".');
+            }
+            continue;
+          }
+
+          if (requested === current.model || requested === `${current.provider}/${current.model}`) {
+            console.log(`Already using "${current.provider}/${current.model}".`);
+            continue;
+          }
+
+          const result = agent.setModel(requested);
+          if (result.ok) {
+            const now = agent.getCurrentModel();
+            console.log(`Switched model to "${now.provider}/${now.model}".`);
+          } else {
+            console.log(result.error);
+          }
+          continue;
+        }
+
         const loaded = agent.loadSkillByName(cmd);
         console.log(loaded ? `Loaded skill: ${cmd}` : `Unknown command or skill: /${cmd}`);
         continue;
       }
 
-      const reply = await agent.handleUserMessage(line);
+      const stopSpinner = startSpinner();
+      let reply: string;
+      try {
+        reply = await agent.handleUserMessage(line);
+      } finally {
+        stopSpinner();
+      }
       console.log(reply);
     }
   } finally {
@@ -62,4 +126,4 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+await main();

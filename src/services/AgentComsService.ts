@@ -8,14 +8,24 @@ export class AgentComsService {
   private readonly history: ChatMessage[] = [];
 
   constructor(
-    private readonly provider: ModelProvider,
-    private readonly model: string,
-    private readonly contextWindow: number,
+    private provider: ModelProvider,
+    private model: string,
+    private contextWindow: number,
     private readonly toolRegistry: ToolRegistry,
     systemPrompt: string,
     private readonly toolCtx: ToolExecutionContext,
   ) {
     this.history.push({ role: "system", content: systemPrompt });
+  }
+
+  getModel(): string {
+    return this.model;
+  }
+
+  setModel(provider: ModelProvider, model: string, contextWindow: number): void {
+    this.provider = provider;
+    this.model = model;
+    this.contextWindow = contextWindow;
   }
 
   async handleUserMessage(userText: string): Promise<string> {
