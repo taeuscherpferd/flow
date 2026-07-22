@@ -1,4 +1,5 @@
 import type { JSONSchema } from "../providers/types.js";
+import type { SecretsProvider } from "../services/SecretsProvider.js";
 
 export interface ToolExecutionContext {
   cwd: string;
@@ -6,6 +7,7 @@ export interface ToolExecutionContext {
     toolName: string,
     args: Record<string, unknown>,
   ) => Promise<boolean>;
+  secrets: SecretsProvider;
 }
 
 export interface ToolResult {

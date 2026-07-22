@@ -13,8 +13,17 @@ export interface ModelsConfig {
   providers: Record<string, ProviderConfig>;
 }
 
+export type ConfigScalar = string | number | boolean;
+
+export type SkillsConfig = Record<string, Record<string, ConfigScalar>>;
+
+export interface AppConfig {
+  skills?: SkillsConfig;
+}
+
 export interface ResolvedConfig {
   models: ModelsConfig;
+  skillsConfig: SkillsConfig;
   soul: string;
   agentsInstructions: string;
   globalDir: string;
@@ -74,23 +83,54 @@ export class ConfigService {
     await this.ensureGlobalScaffold();
 
     const globalModels =
-      (await readJsonIfExists<ModelsConfig>(path.join(this.globalDir, "models.json"))) ?? DEFAULT_MODELS_CONFIG;
+      (await readJsonIfExists<ModelsConfig>(
+        path.join(this.globalDir, "models.json"),
+      )) ?? DEFAULT_MODELS_CONFIG;
     const projectModels = await readJsonIfExists<Partial<ModelsConfig>>(
       path.join(this.projectDir, "models.json"),
     );
     const models = this.mergeModelsConfig(globalModels, projectModels);
     this.validateModelsConfig(models);
 
+    const globalApp =
+      (await readJsonIfExists<AppConfig>(
+        path.join(this.globalDir, "config.json"),
+      )) ?? {};
+    const projectApp =
+      (await readJsonIfExists<AppConfig>(
+        path.join(this.projectDir, "config.json"),
+      )) ?? {};
+    const skillsConfig = this.mergeSkillsConfig(
+      globalApp.skills,
+      projectApp.skills,
+    );
+
     const soul = await this.loadSoul();
     const agentsInstructions = await this.loadAgentsInstructions();
 
     return {
       models,
+      skillsConfig,
       soul,
       agentsInstructions,
       globalDir: this.globalDir,
       projectDir: this.projectDir,
     };
+  }
+
+  private mergeSkillsConfig(
+    global: SkillsConfig | undefined,
+    project: SkillsConfig | undefined,
+  ): SkillsConfig {
+    const merged: SkillsConfig = {};
+    const names = new Set([
+      ...Object.keys(global ?? {}),
+      ...Object.keys(project ?? {}),
+    ]);
+    for (const name of names) {
+      merged[name] = { ...global?.[name], ...project?.[name] };
+    }
+    return merged;
   }
 
   private async ensureGlobalScaffold(): Promise<void> {
@@ -102,13 +142,30 @@ export class ConfigService {
       JSON.stringify(DEFAULT_MODELS_CONFIG, null, 2),
       "utf-8",
     );
-    await writeFile(path.join(this.globalDir, "SOUL.md"), DEFAULT_SOUL, "utf-8");
+
+    await writeFile(
+      path.join(this.globalDir, "config.json"),
+      JSON.stringify({ skills: {} }, null, 2),
+      "utf-8",
+    );
+
+    await writeFile(
+      path.join(this.globalDir, "SOUL.md"),
+      DEFAULT_SOUL,
+      "utf-8",
+    );
+
     await writeFile(path.join(this.globalDir, "AGENTS.md"), "", "utf-8");
 
-    console.log(`First run: created ${this.globalDir} with defaults. Edit it any time.`);
+    console.log(
+      `First run: created ${this.globalDir} with defaults. Edit it any time.`,
+    );
   }
 
-  private mergeModelsConfig(global: ModelsConfig, project: Partial<ModelsConfig> | undefined): ModelsConfig {
+  private mergeModelsConfig(
+    global: ModelsConfig,
+    project: Partial<ModelsConfig> | undefined,
+  ): ModelsConfig {
     if (!project) return global;
 
     const providers: Record<string, ProviderConfig> = {
@@ -131,7 +188,10 @@ export class ConfigService {
       );
     }
 
-    const hasModel = provider.models.some((m) => m.name === models.defaultModel);
+    const hasModel = provider.models.some(
+      (m) => m.name === models.defaultModel,
+    );
+
     if (!hasModel) {
       throw new ConfigError(
         `No model configured for "${models.defaultProvider}". Pull one (e.g. "ollama pull ${models.defaultModel}") ` +
@@ -152,8 +212,10 @@ export class ConfigService {
     const project = await readIfExists(path.join(this.projectDir, "AGENTS.md"));
 
     const sections: string[] = [];
-    if (global && global.trim().length > 0) sections.push(`## Global Instructions\n\n${global.trim()}`);
-    if (project && project.trim().length > 0) sections.push(`## Project Instructions\n\n${project.trim()}`);
+    if (global && global.trim().length > 0)
+      sections.push(`## Global Instructions\n\n${global.trim()}`);
+    if (project && project.trim().length > 0)
+      sections.push(`## Project Instructions\n\n${project.trim()}`);
     return sections.join("\n\n---\n\n");
   }
 }

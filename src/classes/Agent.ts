@@ -1,8 +1,10 @@
+import path from "node:path";
 import { OllamaProvider } from "../providers/OllamaProvider.js";
 import type { ModelProvider } from "../providers/types.js";
 import { AgentComsService } from "../services/AgentComsService.js";
 import type { ModelsConfig, ProviderConfig } from "../services/ConfigService.js";
 import { ConfigService } from "../services/ConfigService.js";
+import { EnvSecretsProvider } from "../services/SecretsProvider.js";
 import type { SkillFrontmatter } from "../services/SkillsService.js";
 import { SkillsService } from "../services/SkillsService.js";
 import { ToolRegistry } from "../tools/index.js";
@@ -66,8 +68,16 @@ export class Agent {
     const configService = new ConfigService();
     const config = await configService.load();
 
-    const skillsService = new SkillsService(config.globalDir, config.projectDir);
+    // Project `.env` is listed first so its values win over the global one;
+    // real shell environment variables win over both 
+    const secrets = new EnvSecretsProvider([
+      path.join(config.projectDir, ".env"),
+      path.join(config.globalDir, ".env"),
+    ]);
+
+    const skillsService = new SkillsService(config.globalDir, config.projectDir, config.skillsConfig);
     await skillsService.load();
+    skillsService.validateSecrets(secrets);
 
     const providerConfig = config.models.providers[config.models.defaultProvider];
     if (!providerConfig) {
@@ -90,6 +100,7 @@ export class Agent {
     const toolCtx: ToolExecutionContext = {
       cwd: process.cwd(),
       requestPermission: async () => true,
+      secrets,
     };
 
     const agentComs = new AgentComsService(

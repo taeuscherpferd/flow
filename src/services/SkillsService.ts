@@ -1,6 +1,8 @@
+import matter from "gray-matter";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import matter from "gray-matter";
+import type { ConfigScalar, SkillsConfig } from "./ConfigService.js";
+import type { SecretsProvider } from "./SecretsProvider.js";
 
 export interface SkillFrontmatter {
   name: string;
@@ -11,15 +13,51 @@ export interface SkillFrontmatter {
   metadata?: Record<string, unknown>;
 }
 
+export interface FlowmationConfigVar {
+  description?: string;
+  required?: boolean;
+  default?: ConfigScalar;
+}
+
+export interface FlowmationSkillMeta {
+  config?: Record<string, FlowmationConfigVar>;
+  secrets?: string[];
+}
+
 export interface SkillRecord {
   frontmatter: SkillFrontmatter;
   body: string;
+  renderedBody: string;
+  expectedConfigVars?: FlowmationSkillMeta | undefined;
   dir: string;
   source: "global" | "project";
 }
 
 function hasRequiredFrontmatterFields(data: Record<string, unknown>): boolean {
-  return typeof data["name"] === "string" && typeof data["description"] === "string";
+  return (
+    typeof data["name"] === "string" && typeof data["description"] === "string"
+  );
+}
+
+function extractExpectedConfigVars(
+  data: Record<string, unknown>,
+): FlowmationSkillMeta | undefined {
+  const metadata = data["metadata"];
+  if (typeof metadata !== "object" || metadata === null) return undefined;
+  const flow = (metadata as Record<string, unknown>)["flowmation"];
+  if (typeof flow !== "object" || flow === null) return undefined;
+  return flow as FlowmationSkillMeta;
+}
+
+function substitute(
+  body: string,
+  values: Record<string, ConfigScalar>,
+): string {
+  let out = body;
+  for (const [key, value] of Object.entries(values)) {
+    out = out.split(`\${${key}}`).join(String(value));
+  }
+  return out;
 }
 
 export class SkillsService {
@@ -28,6 +66,7 @@ export class SkillsService {
   constructor(
     private readonly globalDir: string,
     private readonly projectDir: string,
+    private readonly skillsConfig: SkillsConfig = {},
   ) {}
 
   async load(): Promise<void> {
@@ -35,7 +74,10 @@ export class SkillsService {
     await this.scanInto(path.join(this.projectDir, "skills"), "project");
   }
 
-  private async scanInto(skillsDir: string, source: "global" | "project"): Promise<void> {
+  private async scanInto(
+    skillsDir: string,
+    source: "global" | "project",
+  ): Promise<void> {
     let entries;
     try {
       entries = await readdir(skillsDir, { withFileTypes: true });
@@ -63,7 +105,9 @@ export class SkillsService {
         data = parsed.data;
         content = parsed.content;
       } catch (err) {
-        console.warn(`Skipping skill "${entry.name}" — failed to parse frontmatter in ${skillFile}: ${String(err)}`);
+        console.warn(
+          `Skipping skill "${entry.name}" — failed to parse frontmatter in ${skillFile}: ${String(err)}`,
+        );
         continue;
       }
 
@@ -75,12 +119,63 @@ export class SkillsService {
       }
 
       const frontmatter = data as unknown as SkillFrontmatter;
+      const expectedConfigVars = extractExpectedConfigVars(data);
+      const body = content.trim();
+      const values = this.resolveValues(frontmatter.name, expectedConfigVars);
+      this.warnOnMissingConfig(frontmatter.name, expectedConfigVars, values);
+
       this.skills.set(frontmatter.name, {
         frontmatter,
-        body: content.trim(),
+        body,
+        renderedBody: substitute(body, values),
+        expectedConfigVars,
         dir: skillDir,
         source,
       });
+    }
+  }
+
+  private resolveValues(
+    skillName: string,
+    meta: FlowmationSkillMeta | undefined,
+  ): Record<string, ConfigScalar> {
+    const values: Record<string, ConfigScalar> = {};
+    for (const [key, spec] of Object.entries(meta?.config ?? {})) {
+      if (spec?.default !== undefined) values[key] = spec.default;
+    }
+    for (const [key, value] of Object.entries(
+      this.skillsConfig[skillName] ?? {},
+    )) {
+      values[key] = value;
+    }
+    return values;
+  }
+
+  private warnOnMissingConfig(
+    skillName: string,
+    meta: FlowmationSkillMeta | undefined,
+    values: Record<string, ConfigScalar>,
+  ): void {
+    for (const [key, spec] of Object.entries(meta?.config ?? {})) {
+      if (spec?.required && values[key] === undefined) {
+        console.warn(
+          `Skill "${skillName}" needs config "${key}" — set skills.${skillName}.${key} in ` +
+            `${path.join(this.projectDir, "config.json")} or ${path.join(this.globalDir, "config.json")}.`,
+        );
+      }
+    }
+  }
+
+  validateSecrets(secrets: SecretsProvider): void {
+    for (const record of this.skills.values()) {
+      for (const name of record.expectedConfigVars?.secrets ?? []) {
+        if (!secrets.has(name)) {
+          console.warn(
+            `Skill "${record.frontmatter.name}" expects secret "${name}", which is not set — ` +
+              `add it to ${path.join(this.globalDir, ".env")} or your environment.`,
+          );
+        }
+      }
     }
   }
 
@@ -93,6 +188,6 @@ export class SkillsService {
   }
 
   getBody(name: string): string | undefined {
-    return this.skills.get(name)?.body;
+    return this.skills.get(name)?.renderedBody;
   }
 }
