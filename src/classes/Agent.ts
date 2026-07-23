@@ -7,7 +7,7 @@ import { ConfigService } from "../services/ConfigService.js";
 import { EnvSecretsProvider } from "../services/SecretsProvider.js";
 import type { SkillFrontmatter } from "../services/SkillsService.js";
 import { SkillsService } from "../services/SkillsService.js";
-import { ToolRegistry } from "../tools/index.js";
+import { ToolRegistry } from "../tools/ToolRegistry.js";
 import type { ToolExecutionContext } from "../tools/types.js";
 
 function buildSystemPrompt(
@@ -64,9 +64,11 @@ export class Agent {
     this.currentProvider = initialProvider;
   }
 
-  static async create(): Promise<Agent> {
-    const configService = new ConfigService();
+  static async create(
+    configService: ConfigService = new ConfigService(),
+  ): Promise<Agent> {
     const config = await configService.load();
+    configService.validateModelsConfig(config.models);
 
     // Project `.env` is listed first so its values win over the global one;
     // real shell environment variables win over both 

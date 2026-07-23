@@ -10,7 +10,12 @@ export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
 
   constructor(skillsService: SkillsService) {
-    const allTools = [readFileTool, writeFileTool, runCommandTool, createLoadSkillTool(skillsService)];
+    const allTools = [
+      readFileTool,
+      writeFileTool,
+      runCommandTool,
+      createLoadSkillTool(skillsService),
+    ];
     for (const tool of allTools) {
       this.tools.set(tool.name, tool);
     }

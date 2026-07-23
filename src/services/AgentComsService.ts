@@ -1,5 +1,5 @@
 import type { ChatMessage, ModelProvider, ToolCall } from "../providers/types.js";
-import type { ToolRegistry } from "../tools/index.js";
+import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import type { ToolExecutionContext, ToolResult } from "../tools/types.js";
 
 const MAX_TOOL_ITERATIONS = 8;

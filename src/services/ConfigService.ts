@@ -30,6 +30,18 @@ export interface ResolvedConfig {
   projectDir: string;
 }
 
+export interface ConfigDirectories {
+  globalDir?: string;
+  projectDir?: string;
+}
+
+export interface ModelSetup {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  contextWindow: number;
+}
+
 export class ConfigError extends Error {}
 
 const DEFAULT_SOUL = "You are a helpful, terse coding assistant.\n";
@@ -74,9 +86,11 @@ export class ConfigService {
   readonly globalDir: string;
   readonly projectDir: string;
 
-  constructor() {
-    this.globalDir = path.join(os.homedir(), ".work-agent");
-    this.projectDir = path.join(process.cwd(), ".work-agent");
+  constructor(directories: ConfigDirectories = {}) {
+    this.globalDir =
+      directories.globalDir ?? path.join(os.homedir(), ".work-agent");
+    this.projectDir =
+      directories.projectDir ?? path.join(process.cwd(), ".work-agent");
   }
 
   async load(): Promise<ResolvedConfig> {
@@ -90,7 +104,6 @@ export class ConfigService {
       path.join(this.projectDir, "models.json"),
     );
     const models = this.mergeModelsConfig(globalModels, projectModels);
-    this.validateModelsConfig(models);
 
     const globalApp =
       (await readJsonIfExists<AppConfig>(
@@ -116,6 +129,64 @@ export class ConfigService {
       globalDir: this.globalDir,
       projectDir: this.projectDir,
     };
+  }
+
+  hasConfiguredDefaultModel(models: ModelsConfig): boolean {
+    const provider = models.providers[models.defaultProvider];
+    return (
+      provider?.models.some((model) => model.name === models.defaultModel) ??
+      false
+    );
+  }
+
+  validateModelsConfig(models: ModelsConfig): void {
+    const provider = models.providers[models.defaultProvider];
+    if (!provider) {
+      throw new ConfigError(
+        `No provider named "${models.defaultProvider}" configured. Check models.json in ${this.globalDir} or ${this.projectDir}.`,
+      );
+    }
+
+    const hasModel = provider.models.some(
+      (model) => model.name === models.defaultModel,
+    );
+
+    if (!hasModel) {
+      throw new ConfigError(
+        `No model configured for "${models.defaultProvider}". Use /model to configure one, ` +
+          `or update defaultModel in ${path.join(this.globalDir, "models.json")}.`,
+      );
+    }
+  }
+
+  async saveModelSetup(setup: ModelSetup): Promise<string> {
+    await this.ensureGlobalScaffold();
+
+    const modelsPath = path.join(this.globalDir, "models.json");
+    const current =
+      (await readJsonIfExists<ModelsConfig>(modelsPath)) ??
+      DEFAULT_MODELS_CONFIG;
+    const existingProvider = current.providers[setup.provider];
+    const models = [
+      ...(existingProvider?.models.filter(
+        (model) => model.name !== setup.model,
+      ) ?? []),
+      { name: setup.model, contextWindow: setup.contextWindow },
+    ];
+    const next: ModelsConfig = {
+      defaultProvider: setup.provider,
+      defaultModel: setup.model,
+      providers: {
+        ...current.providers,
+        [setup.provider]: {
+          baseUrl: setup.baseUrl,
+          models,
+        },
+      },
+    };
+
+    await writeFile(modelsPath, JSON.stringify(next, null, 2), "utf-8");
+    return modelsPath;
   }
 
   private mergeSkillsConfig(
@@ -178,26 +249,6 @@ export class ConfigService {
       defaultModel: project.defaultModel ?? global.defaultModel,
       providers,
     };
-  }
-
-  private validateModelsConfig(models: ModelsConfig): void {
-    const provider = models.providers[models.defaultProvider];
-    if (!provider) {
-      throw new ConfigError(
-        `No provider named "${models.defaultProvider}" configured. Check models.json in ${this.globalDir} or ${this.projectDir}.`,
-      );
-    }
-
-    const hasModel = provider.models.some(
-      (m) => m.name === models.defaultModel,
-    );
-
-    if (!hasModel) {
-      throw new ConfigError(
-        `No model configured for "${models.defaultProvider}". Pull one (e.g. "ollama pull ${models.defaultModel}") ` +
-          `and add it to models.json, or update defaultModel in ${path.join(this.globalDir, "models.json")}.`,
-      );
-    }
   }
 
   private async loadSoul(): Promise<string> {
