@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue, WorkflowSchema } from "./types.js";
+import type { JsonObject, JsonValue, WorkflowSchema } from "#src/workflows/types.js";
 
 export interface SchemaValidationResult {
   valid: boolean;

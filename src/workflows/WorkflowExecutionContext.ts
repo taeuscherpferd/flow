@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { assertJsonValue } from "./schema.js";
-import { workflowOutputApi } from "./sdk.js";
+import { assertJsonValue } from "#src/workflows/schema.js";
+import { workflowOutputApi } from "#src/workflows/sdk.js";
 import type {
   ElevationFailure,
   ElevationOptions,
@@ -17,16 +17,16 @@ import type {
   WorkflowHumanApi,
   WorkflowHumanPrompt,
   WorkflowMapOptions,
-} from "./types.js";
+} from "#src/workflows/types.js";
 import {
   WorkflowAgentCoordinator,
   type WorkflowAgentRuntime,
-} from "./WorkflowAgentCoordinator.js";
-import { runWorkflowCommand } from "./WorkflowProcess.js";
+} from "#src/workflows/WorkflowAgentCoordinator.js";
+import { runWorkflowCommand } from "#src/workflows/WorkflowProcess.js";
 import type {
   WorkflowRunStore,
   WorkflowStepKind,
-} from "./WorkflowRunStore.js";
+} from "#src/workflows/WorkflowRunStore.js";
 
 const STEP_KEY_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 

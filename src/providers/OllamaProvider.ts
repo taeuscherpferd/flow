@@ -6,8 +6,8 @@ import type {
   ModelProvider,
   ToolCall,
   ToolDef,
-} from "./types.js";
-import type { JsonObject } from "../workflows/types.js";
+} from "#src/providers/types.js";
+import type { JsonObject } from "#src/workflows/types.js";
 
 interface OllamaWireToolCall {
   function: { name: string; arguments: JsonObject };

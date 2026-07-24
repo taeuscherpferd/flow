@@ -1,6 +1,6 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-import type { Tool } from "./types.js";
+import type { Tool } from "#src/tools/types.js";
 
 const execAsync = promisify(exec);
 

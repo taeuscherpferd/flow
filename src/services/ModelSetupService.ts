@@ -1,5 +1,5 @@
-import type { ConfigService, ModelSetup } from "./ConfigService.js";
-import { EOF } from "../ui/lineEditor.js";
+import type { ConfigService, ModelSetup } from "#src/services/ConfigService.js";
+import { EOF } from "#src/ui/lineEditor.js";
 
 export type SetupPrompt = (prompt: string) => Promise<string | typeof EOF>;
 export type SetupOutput = (message: string) => void;

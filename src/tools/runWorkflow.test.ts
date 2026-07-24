@@ -4,8 +4,8 @@ import {
   buildWorkflowSystemContext,
   createRunWorkflowTool,
   type WorkflowToolRuntime,
-} from "./runWorkflow.js";
-import type { WorkflowRecord } from "../workflows/types.js";
+} from "#src/tools/runWorkflow.js";
+import type { WorkflowRecord } from "#src/workflows/types.js";
 
 function createRecord(
   name: string,

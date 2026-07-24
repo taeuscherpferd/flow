@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import type {
   WorkflowExecOptions,
   WorkflowExecResult,
-} from "./types.js";
-import { terminateProcessTree } from "./WorkflowProcessTree.js";
+} from "#src/workflows/types.js";
+import { terminateProcessTree } from "#src/workflows/WorkflowProcessTree.js";
 
 const DEFAULT_MAX_OUTPUT_BYTES = 5 * 1024 * 1024;
 

@@ -2,7 +2,7 @@ import type {
   JsonValue,
   WorkflowHumanAdapter,
   WorkflowHumanPrompt,
-} from "./types.js";
+} from "#src/workflows/types.js";
 
 export class SerializedWorkflowHumanAdapter implements WorkflowHumanAdapter {
   private tail: Promise<void> = Promise.resolve();

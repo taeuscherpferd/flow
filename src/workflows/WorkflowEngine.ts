@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { assertJsonValue } from "./schema.js";
-import { isWorkflowOutput } from "./sdk.js";
+import { assertJsonValue } from "#src/workflows/schema.js";
+import { isWorkflowOutput } from "#src/workflows/sdk.js";
 import type {
   JsonValue,
   WorkflowHumanAdapter,
@@ -9,14 +9,14 @@ import type {
   WorkflowPresentation,
   WorkflowRunDetails,
   WorkflowRunSummary,
-} from "./types.js";
-import type { WorkflowAgentRuntime } from "./WorkflowAgentCoordinator.js";
+} from "#src/workflows/types.js";
+import type { WorkflowAgentRuntime } from "#src/workflows/WorkflowAgentCoordinator.js";
 import {
   WorkflowExecutionContext,
   WorkflowSuspendedError,
-} from "./WorkflowExecutionContext.js";
-import type { WorkflowRegistry } from "./WorkflowRegistry.js";
-import type { WorkflowRunStore } from "./WorkflowRunStore.js";
+} from "#src/workflows/WorkflowExecutionContext.js";
+import type { WorkflowRegistry } from "#src/workflows/WorkflowRegistry.js";
+import type { WorkflowRunStore } from "#src/workflows/WorkflowRunStore.js";
 
 export interface StartWorkflowOptions {
   humanAdapter?: WorkflowHumanAdapter;

@@ -4,11 +4,11 @@ import type {
   ChatCompletionRequest,
   ChatCompletionResult,
   ModelProvider,
-} from "../providers/types.js";
-import { ToolRegistry } from "../tools/ToolRegistry.js";
-import type { Tool, ToolExecutionContext } from "../tools/types.js";
-import { SkillsService } from "./SkillsService.js";
-import { AgentComsService } from "./AgentComsService.js";
+} from "#src/providers/types.js";
+import { ToolRegistry } from "#src/tools/ToolRegistry.js";
+import type { Tool, ToolExecutionContext } from "#src/tools/types.js";
+import { SkillsService } from "#src/services/SkillsService.js";
+import { AgentComsService } from "#src/services/AgentComsService.js";
 
 class RecordingProvider implements ModelProvider {
   readonly id = "recording";

@@ -57,4 +57,4 @@ export interface ModelProvider {
   readonly id: string;
   chat(request: ChatCompletionRequest): Promise<ChatCompletionResult>;
 }
-import type { JsonObject } from "../workflows/types.js";
+import type { JsonObject } from "#src/workflows/types.js";

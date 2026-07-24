@@ -208,4 +208,6 @@ pnpm run build
 ```
 
 The CLI entry point is `src/index.ts`. Workflow discovery, storage, agent
-coordination, and execution live under `src/workflows`.
+coordination, and execution live under `src/workflows`. Internal modules use the
+`#src/*` package import alias; relative module imports are reserved for generated
+workflow fixtures that exercise workflow-local dependencies.

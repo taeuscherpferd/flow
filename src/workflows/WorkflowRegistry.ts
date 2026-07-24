@@ -4,14 +4,14 @@ import { registerHooks } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tsImport } from "tsx/esm/api";
-import { validateSchema } from "./schema.js";
+import { validateSchema } from "#src/workflows/schema.js";
 import type {
   AgentInvocationPolicy,
   JsonValue,
   WorkflowDefinition,
   WorkflowPresentation,
   WorkflowRecord,
-} from "./types.js";
+} from "#src/workflows/types.js";
 
 const WORKFLOW_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ENTRY_NAMES = ["WORKFLOW.ts", "WORKFLOW.js"] as const;

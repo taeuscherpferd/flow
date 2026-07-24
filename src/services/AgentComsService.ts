@@ -1,6 +1,6 @@
-import type { ChatMessage, ModelProvider, ToolCall } from "../providers/types.js";
-import type { ToolRegistry } from "../tools/ToolRegistry.js";
-import type { ToolExecutionContext, ToolResult } from "../tools/types.js";
+import type { ChatMessage, ModelProvider, ToolCall } from "#src/providers/types.js";
+import type { ToolRegistry } from "#src/tools/ToolRegistry.js";
+import type { ToolExecutionContext, ToolResult } from "#src/tools/types.js";
 
 const MAX_TOOL_ITERATIONS = 8;
 

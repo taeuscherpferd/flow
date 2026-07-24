@@ -3,7 +3,7 @@ import { access, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { runWorkflowCommand } from "./WorkflowProcess.js";
+import { runWorkflowCommand } from "#src/workflows/WorkflowProcess.js";
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {

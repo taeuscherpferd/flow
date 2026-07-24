@@ -1,10 +1,10 @@
-import type { Tool } from "./types.js";
+import type { Tool } from "#src/tools/types.js";
 import type {
   AgentInvocationPolicy,
   JsonValue,
   WorkflowRecord,
   WorkflowSchema,
-} from "../workflows/types.js";
+} from "#src/workflows/types.js";
 
 export interface WorkflowToolRuntime {
   resolve(name: string): Promise<WorkflowRecord | undefined>;

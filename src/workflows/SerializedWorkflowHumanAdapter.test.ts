@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SerializedWorkflowHumanAdapter } from "./SerializedWorkflowHumanAdapter.js";
+import { SerializedWorkflowHumanAdapter } from "#src/workflows/SerializedWorkflowHumanAdapter.js";
 
 test("serializes concurrent human requests", async () => {
   const firstResponse = Promise.withResolvers<string>();

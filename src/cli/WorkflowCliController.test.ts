@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildWorkflowConfirmationDetails } from "./WorkflowCliController.js";
-import type { WorkflowRecord } from "../workflows/types.js";
+import { buildWorkflowConfirmationDetails } from "#src/cli/WorkflowCliController.js";
+import type { WorkflowRecord } from "#src/workflows/types.js";
 
 const workflow: WorkflowRecord = {
   definition: {

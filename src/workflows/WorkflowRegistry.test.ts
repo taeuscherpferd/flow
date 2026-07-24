@@ -9,7 +9,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { WorkflowRegistry } from "./WorkflowRegistry.js";
+import { WorkflowRegistry } from "#src/workflows/WorkflowRegistry.js";
 
 interface GeneratedWorkflowTsConfig {
   compilerOptions: {

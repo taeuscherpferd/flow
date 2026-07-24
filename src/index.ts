@@ -1,5 +1,5 @@
 #!/usr/bin/env node
 
-import { FlowCli } from "./cli/FlowCli.js";
+import { FlowCli } from "#src/cli/FlowCli.js";
 
 await new FlowCli().run();

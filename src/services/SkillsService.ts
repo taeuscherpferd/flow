@@ -1,8 +1,8 @@
 import matter from "gray-matter";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { ConfigScalar, SkillsConfig } from "./ConfigService.js";
-import type { SecretsProvider } from "./SecretsProvider.js";
+import type { ConfigScalar, SkillsConfig } from "#src/services/ConfigService.js";
+import type { SecretsProvider } from "#src/services/SecretsProvider.js";
 
 export interface SkillFrontmatter {
   name: string;

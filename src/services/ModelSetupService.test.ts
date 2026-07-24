@@ -3,12 +3,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ConfigService } from "./ConfigService.js";
+import { ConfigService } from "#src/services/ConfigService.js";
 import {
   ModelSetupService,
   type SetupPrompt,
-} from "./ModelSetupService.js";
-import { EOF } from "../ui/lineEditor.js";
+} from "#src/services/ModelSetupService.js";
+import { EOF } from "#src/ui/lineEditor.js";
 
 interface TestSetup {
   rootDir: string;

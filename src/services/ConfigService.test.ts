@@ -6,7 +6,7 @@ import test from "node:test";
 import {
   ConfigService,
   type ModelsConfig,
-} from "./ConfigService.js";
+} from "#src/services/ConfigService.js";
 
 interface TestConfig {
   rootDir: string;

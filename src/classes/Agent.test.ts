@@ -5,8 +5,8 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ConfigService } from "../services/ConfigService.js";
-import { Agent } from "./Agent.js";
+import { ConfigService } from "#src/services/ConfigService.js";
+import { Agent } from "#src/classes/Agent.js";
 
 interface RecordedChatRequest {
   messages: Array<{ role: string; content: string }>;

@@ -1,22 +1,22 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { OllamaProvider } from "../providers/OllamaProvider.js";
-import type { ChatMessage, ModelProvider } from "../providers/types.js";
-import { AgentComsService } from "../services/AgentComsService.js";
-import type { ModelsConfig, ProviderConfig } from "../services/ConfigService.js";
-import { ConfigService } from "../services/ConfigService.js";
-import { EnvSecretsProvider } from "../services/SecretsProvider.js";
-import type { SkillFrontmatter } from "../services/SkillsService.js";
-import { SkillsService } from "../services/SkillsService.js";
+import { OllamaProvider } from "#src/providers/OllamaProvider.js";
+import type { ChatMessage, ModelProvider } from "#src/providers/types.js";
+import { AgentComsService } from "#src/services/AgentComsService.js";
+import type { ModelsConfig, ProviderConfig } from "#src/services/ConfigService.js";
+import { ConfigService } from "#src/services/ConfigService.js";
+import { EnvSecretsProvider } from "#src/services/SecretsProvider.js";
+import type { SkillFrontmatter } from "#src/services/SkillsService.js";
+import { SkillsService } from "#src/services/SkillsService.js";
 import {
   buildWorkflowSystemContext,
   createRunWorkflowTool,
   type WorkflowToolRuntime,
-} from "../tools/runWorkflow.js";
-import { ToolRegistry } from "../tools/ToolRegistry.js";
-import type { ToolExecutionContext } from "../tools/types.js";
-import type { JsonValue, WorkflowRecord } from "../workflows/types.js";
-import { AgentSession } from "./AgentSession.js";
+} from "#src/tools/runWorkflow.js";
+import { ToolRegistry } from "#src/tools/ToolRegistry.js";
+import type { ToolExecutionContext } from "#src/tools/types.js";
+import type { JsonValue, WorkflowRecord } from "#src/workflows/types.js";
+import { AgentSession } from "#src/classes/AgentSession.js";
 
 function buildSystemPrompt(
   soul: string,

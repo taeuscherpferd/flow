@@ -1,5 +1,5 @@
-import type { SkillsService } from "../services/SkillsService.js";
-import type { Tool } from "./types.js";
+import type { SkillsService } from "#src/services/SkillsService.js";
+import type { Tool } from "#src/tools/types.js";
 
 export function createLoadSkillTool(skillsService: SkillsService): Tool {
   return {

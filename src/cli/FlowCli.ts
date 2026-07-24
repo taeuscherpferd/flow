@@ -1,13 +1,13 @@
-import { Agent } from "../classes/Agent.js";
-import { ConfigService } from "../services/ConfigService.js";
-import { ModelSetupService } from "../services/ModelSetupService.js";
-import { EOF, ghostPrompt } from "../ui/lineEditor.js";
-import { startSpinner } from "../ui/spinner.js";
-import { WorkflowRegistry } from "../workflows/WorkflowRegistry.js";
+import { Agent } from "#src/classes/Agent.js";
+import { ConfigService } from "#src/services/ConfigService.js";
+import { ModelSetupService } from "#src/services/ModelSetupService.js";
+import { EOF, ghostPrompt } from "#src/ui/lineEditor.js";
+import { startSpinner } from "#src/ui/spinner.js";
+import { WorkflowRegistry } from "#src/workflows/WorkflowRegistry.js";
 import {
   WorkflowCliController,
   type WorkflowCliUi,
-} from "./WorkflowCliController.js";
+} from "#src/cli/WorkflowCliController.js";
 
 const BUILTIN_COMMANDS = [
   "help",

@@ -7,7 +7,7 @@ import type {
   WorkflowRunDetails,
   WorkflowRunStatus,
   WorkflowRunSummary,
-} from "./types.js";
+} from "#src/workflows/types.js";
 
 interface StoredRunRow {
   id: string;

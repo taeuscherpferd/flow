@@ -1,4 +1,4 @@
-import type { ModelRef } from "../classes/Agent.js";
+import type { ModelRef } from "#src/classes/Agent.js";
 
 export type JsonPrimitive = string | number | boolean | null;
 

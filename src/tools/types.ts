@@ -1,6 +1,6 @@
-import type { JSONSchema } from "../providers/types.js";
-import type { SecretsProvider } from "../services/SecretsProvider.js";
-import type { JsonObject } from "../workflows/types.js";
+import type { JSONSchema } from "#src/providers/types.js";
+import type { SecretsProvider } from "#src/services/SecretsProvider.js";
+import type { JsonObject } from "#src/workflows/types.js";
 
 export interface ToolExecutionContext {
   cwd: string;

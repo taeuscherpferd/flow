@@ -4,7 +4,7 @@ import type {
   WorkflowOutputApi,
   WorkflowOutputValue,
   WorkflowPresentation,
-} from "./types.js";
+} from "#src/workflows/types.js";
 
 const OUTPUT_MARKER = Symbol.for("flowmation.workflow-output");
 
@@ -17,7 +17,7 @@ export function defineWorkflow<
   return definition;
 }
 
-export type * from "./types.js";
+export type * from "#src/workflows/types.js";
 
 function createOutput<TValue extends JsonValue>(
   value: TValue,

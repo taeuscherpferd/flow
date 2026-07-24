@@ -1,16 +1,16 @@
-import type { Agent } from "../classes/Agent.js";
-import { EOF, ghostPrompt } from "../ui/lineEditor.js";
-import { WorkflowEngine } from "../workflows/WorkflowEngine.js";
-import type { WorkflowRegistry } from "../workflows/WorkflowRegistry.js";
-import { WorkflowRunStore } from "../workflows/WorkflowRunStore.js";
-import { SerializedWorkflowHumanAdapter } from "../workflows/SerializedWorkflowHumanAdapter.js";
+import type { Agent } from "#src/classes/Agent.js";
+import { EOF, ghostPrompt } from "#src/ui/lineEditor.js";
+import { WorkflowEngine } from "#src/workflows/WorkflowEngine.js";
+import type { WorkflowRegistry } from "#src/workflows/WorkflowRegistry.js";
+import { WorkflowRunStore } from "#src/workflows/WorkflowRunStore.js";
+import { SerializedWorkflowHumanAdapter } from "#src/workflows/SerializedWorkflowHumanAdapter.js";
 import type {
   JsonValue,
   WorkflowHumanAdapter,
   WorkflowHumanPrompt,
   WorkflowInvocationResult,
   WorkflowRecord,
-} from "../workflows/types.js";
+} from "#src/workflows/types.js";
 
 export interface WorkflowCliUi {
   pauseSpinner(): boolean;
@@ -319,7 +319,7 @@ export class WorkflowCliController {
 
   private printWorkflowLog(
     message: string,
-    data?: import("../workflows/types.js").JsonValue,
+    data?: import("#src/workflows/types.js").JsonValue,
   ): void {
     if (!this.debugLogging) return;
     const hadSpinner = this.ui.pauseSpinner();

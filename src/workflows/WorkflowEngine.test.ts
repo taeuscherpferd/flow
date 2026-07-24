@@ -8,15 +8,15 @@ import type {
   ChatCompletionResult,
   ChatMessage,
   ModelProvider,
-} from "../providers/types.js";
+} from "#src/providers/types.js";
 import type {
   WorkflowAgentRuntime,
   WorkflowAgentSessionRuntime,
-} from "./WorkflowAgentCoordinator.js";
-import { WorkflowEngine } from "./WorkflowEngine.js";
-import { WorkflowRegistry } from "./WorkflowRegistry.js";
-import { WorkflowRunStore } from "./WorkflowRunStore.js";
-import type { WorkflowHumanAdapter } from "./types.js";
+} from "#src/workflows/WorkflowAgentCoordinator.js";
+import { WorkflowEngine } from "#src/workflows/WorkflowEngine.js";
+import { WorkflowRegistry } from "#src/workflows/WorkflowRegistry.js";
+import { WorkflowRunStore } from "#src/workflows/WorkflowRunStore.js";
+import type { WorkflowHumanAdapter } from "#src/workflows/types.js";
 
 const fakeProvider: ModelProvider = {
   id: "fake",

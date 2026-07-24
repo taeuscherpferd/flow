@@ -1,4 +1,4 @@
-import type { ChatMessage, ModelProvider } from "../providers/types.js";
+import type { ChatMessage, ModelProvider } from "#src/providers/types.js";
 import type {
   ElevationContext,
   JsonValue,
@@ -8,7 +8,7 @@ import type {
   WorkflowAgentRunOptions,
   WorkflowAgentSession,
   WorkflowAgentsApi,
-} from "./types.js";
+} from "#src/workflows/types.js";
 
 export interface WorkflowAgentSessionRuntime {
   readonly id: string;

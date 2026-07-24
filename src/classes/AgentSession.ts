@@ -1,7 +1,7 @@
-import type { ModelProvider } from "../providers/types.js";
-import type { ChatMessage } from "../providers/types.js";
-import type { AgentComsService } from "../services/AgentComsService.js";
-import type { WorkflowAgentRunOptions } from "../workflows/types.js";
+import type { ModelProvider } from "#src/providers/types.js";
+import type { ChatMessage } from "#src/providers/types.js";
+import type { AgentComsService } from "#src/services/AgentComsService.js";
+import type { WorkflowAgentRunOptions } from "#src/workflows/types.js";
 
 export interface AgentSessionModel {
   provider: string;
