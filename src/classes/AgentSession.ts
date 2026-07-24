@@ -1,11 +1,23 @@
-import type { ModelProvider } from "#src/providers/types.js";
-import type { ChatMessage } from "#src/providers/types.js";
+import type {
+  ChatMessage,
+  ModelProvider,
+  ThinkingMode,
+} from "#src/providers/types.js";
 import type { AgentComsService } from "#src/services/AgentComsService.js";
-import type { WorkflowAgentRunOptions } from "#src/workflows/types.js";
+import type {
+  WorkflowAgentRunOptions,
+  WorkflowThinking,
+} from "#src/workflows/types.js";
 
 export interface AgentSessionModel {
   provider: string;
   model: string;
+}
+
+function toProviderThinking(
+  thinking: WorkflowThinking | undefined,
+): ThinkingMode | undefined {
+  return thinking;
 }
 
 export class AgentSession {
@@ -27,11 +39,11 @@ export class AgentSession {
     options: WorkflowAgentRunOptions = {},
     signal?: AbortSignal,
   ): Promise<string> {
-    return this.agentComs.handleUserMessage(
-      prompt,
-      signal,
-      options.tools ?? "default",
-    );
+    const thinking = toProviderThinking(options.thinking);
+    return this.agentComs.handleUserMessage(prompt, {
+      tools: options.tools ?? "default",
+      ...(thinking === undefined ? {} : { thinking }),
+    }, signal);
   }
 
   snapshotHistory(): ChatMessage[] {

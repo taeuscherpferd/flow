@@ -1,8 +1,18 @@
-import type { ChatMessage, ModelProvider, ToolCall } from "#src/providers/types.js";
+import type {
+  ChatMessage,
+  ModelProvider,
+  ThinkingMode,
+  ToolCall,
+} from "#src/providers/types.js";
 import type { ToolRegistry } from "#src/tools/ToolRegistry.js";
 import type { ToolExecutionContext, ToolResult } from "#src/tools/types.js";
 
 const MAX_TOOL_ITERATIONS = 8;
+
+export interface AgentTurnOptions {
+  tools?: "default" | "none";
+  thinking?: ThinkingMode;
+}
 
 export class AgentComsService {
   private readonly history: ChatMessage[] = [];
@@ -34,11 +44,12 @@ export class AgentComsService {
 
   async handleUserMessage(
     userText: string,
+    turnOptions: AgentTurnOptions = {},
     signal?: AbortSignal,
-    tools: "default" | "none" = "default",
   ): Promise<string> {
     signal?.throwIfAborted();
     this.history.push({ role: "user", content: userText });
+    const tools = turnOptions.tools ?? "default";
 
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
       let result;
@@ -49,7 +60,12 @@ export class AgentComsService {
           ...(tools === "default"
             ? { tools: this.toolRegistry.getToolDefs() }
             : {}),
-          options: { numCtx: this.contextWindow },
+          options: {
+            numCtx: this.contextWindow,
+            ...(turnOptions.thinking === undefined
+              ? {}
+              : { thinking: turnOptions.thinking }),
+          },
           ...(signal === undefined ? {} : { signal }),
         });
       } catch (err) {
@@ -63,6 +79,9 @@ export class AgentComsService {
           ? {
               role: result.message.role,
               content: result.message.content,
+              ...(result.message.thinking === undefined
+                ? {}
+                : { thinking: result.message.thinking }),
             }
           : result.message,
       );

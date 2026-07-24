@@ -190,9 +190,20 @@ interface WorkflowAgentSession {
   readonly model: ModelRef;
   run(
     prompt: string,
-    options?: { tools?: "default" | "none" },
+    options?: {
+      tools?: "default" | "none";
+      thinking?: WorkflowThinking;
+    },
   ): Promise<{ content: string; model: ModelRef }>;
 }
+
+type WorkflowThinking =
+  | "default"
+  | "off"
+  | "on"
+  | "low"
+  | "medium"
+  | "high";
 
 interface ModelRef {
   provider: string;
@@ -204,6 +215,22 @@ interface ModelRef {
 `create` starts an empty session. Repeated `run` calls share that session's
 history. `fork` copies the history and creates a separate session. `model`
 may be a configured alias, `provider/model`, or a unique model name.
+
+The `thinking` run option controls every model request in that turn, including
+requests made after tool results:
+
+| Value | Behavior |
+| --- | --- |
+| omitted or `"default"` | Preserve the provider and model default. |
+| `"off"` | Disable thinking when supported. |
+| `"on"` | Enable thinking when supported. |
+| `"low"` | Request low reasoning effort. |
+| `"medium"` | Request medium reasoning effort. |
+| `"high"` | Request high reasoning effort. |
+
+Support depends on the selected model. Flowmation passes the requested value
+through without clamping or fallback. Reasoning traces are retained in session
+history when the provider supplies them, but are not returned to workflow code.
 
 ### `context.human`
 
@@ -326,6 +353,7 @@ type ElevationContext =
 
 interface ElevationOptions<TValue extends JsonValue, TFallback extends JsonValue = TValue> {
   model: string;
+  thinking?: WorkflowThinking;
   attempts: number;
   context: ElevationContext;
   operation(attempt: {
@@ -347,6 +375,11 @@ interface CheckDetails {
   data?: JsonValue;
 }
 ```
+
+`thinking` sets the default thinking mode for every agent run made through the
+elevation operation's `session`. A `session.run` call may override it with its
+own `thinking` option. For reused sessions, the elevation default is scoped to
+the elevation and does not affect later calls through the original session.
 
 `attempts` must be a positive integer. The operation runs up to that many
 times. `check` may return a boolean or a `CheckDetails` object; `passed`

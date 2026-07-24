@@ -1,18 +1,23 @@
 export type ChatRole = "system" | "user" | "assistant" | "tool";
 
+export type ThinkingMode =
+  | "default"
+  | "off"
+  | "on"
+  | "low"
+  | "medium"
+  | "high";
+
 export interface ChatMessage {
   role: ChatRole;
   content: string;
-  /** Only present on assistant messages that requested tool execution. */
+  thinking?: string;
   toolCalls?: ToolCall[];
-  /** Only present on role:"tool" messages — which call this result answers. */
   toolCallId?: string;
-  /** Only present on role:"tool" messages — echoes the tool name for readability/logging. */
   toolName?: string;
 }
 
 export interface ToolCall {
-  /** Synthesized locally so calls and results can be paired — Ollama's wire format doesn't include one. */
   id: string;
   name: string;
   arguments: JsonObject;
@@ -27,7 +32,6 @@ export interface ToolDef {
   };
 }
 
-/** Minimal structural JSON Schema type — enough for tool params, not a full JSON Schema implementation. */
 export interface JSONSchema {
   type: "object";
   properties: Record<string, JSONSchemaProperty>;
@@ -41,11 +45,16 @@ export interface JSONSchemaProperty {
   items?: JSONSchemaProperty;
 }
 
+export interface ChatCompletionOptions {
+  numCtx?: number;
+  thinking?: ThinkingMode;
+}
+
 export interface ChatCompletionRequest {
   model: string;
   messages: ChatMessage[];
   tools?: ToolDef[];
-  options?: { numCtx?: number };
+  options?: ChatCompletionOptions;
   signal?: AbortSignal;
 }
 

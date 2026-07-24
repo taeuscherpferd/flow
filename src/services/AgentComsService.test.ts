@@ -3,6 +3,7 @@ import test from "node:test";
 import type {
   ChatCompletionRequest,
   ChatCompletionResult,
+  ChatMessage,
   ModelProvider,
 } from "#src/providers/types.js";
 import { ToolRegistry } from "#src/tools/ToolRegistry.js";
@@ -67,8 +68,7 @@ test("omits and ignores tools when an agent run disables them", async () => {
 
   const content = await service.handleUserMessage(
     "Do not use tools",
-    undefined,
-    "none",
+    { tools: "none" },
   );
 
   assert.equal(content, "complete");
@@ -88,6 +88,95 @@ test("keeps tools enabled by default", async () => {
   await service.handleUserMessage("Use tools when useful");
 
   assert.ok((provider.requests[0]?.tools?.length ?? 0) > 0);
+});
+
+test("applies thinking to every request in a tool loop and retains history", async () => {
+  const requests: ChatCompletionRequest[] = [];
+  const responses: ChatMessage[] = [
+    {
+      role: "assistant",
+      content: "",
+      thinking: "I should use a tool",
+      toolCalls: [
+        {
+          id: "call-1",
+          name: "missing-tool",
+          arguments: {},
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      content: "complete",
+      thinking: "I can now answer",
+    },
+  ];
+  const provider: ModelProvider = {
+    id: "tool-loop",
+    async chat(request) {
+      requests.push(structuredClone(request));
+      const message = responses.shift();
+      assert.ok(message);
+      return { message };
+    },
+  };
+  const service = createService(provider);
+
+  const content = await service.handleUserMessage("Use a tool", {
+    thinking: "high",
+  });
+
+  assert.equal(content, "complete");
+  assert.equal(requests.length, 2);
+  assert.deepEqual(
+    requests.map((request) => request.options?.thinking),
+    ["high", "high"],
+  );
+  assert.equal(requests[1]?.messages[2]?.thinking, "I should use a tool");
+  assert.equal(
+    service.snapshotHistory().at(-1)?.thinking,
+    "I can now answer",
+  );
+});
+
+test("retains thinking in tool-free history", async () => {
+  const provider: ModelProvider = {
+    id: "thinking",
+    async chat() {
+      return {
+        message: {
+          role: "assistant",
+          content: "complete",
+          thinking: "private reasoning",
+          toolCalls: [
+            {
+              id: "ignored",
+              name: "read_file",
+              arguments: {},
+            },
+          ],
+        },
+      };
+    },
+  };
+  const service = createService(provider);
+
+  await service.handleUserMessage("Answer directly", { tools: "none" });
+
+  assert.deepEqual(service.snapshotHistory().at(-1), {
+    role: "assistant",
+    content: "complete",
+    thinking: "private reasoning",
+  });
+});
+
+test("omits thinking from provider options by default", async () => {
+  const provider = new RecordingProvider(false);
+  const service = createService(provider);
+
+  await service.handleUserMessage("Use provider defaults");
+
+  assert.equal("thinking" in provider.requests[0]!.options!, false);
 });
 
 test("clears conversation context while restoring static system context", () => {
@@ -181,6 +270,7 @@ test("aborts an active tool and skips remaining tool calls", async () => {
 
   const execution = service.handleUserMessage(
     "Run both tools",
+    {},
     controller.signal,
   );
   await toolStarted.promise;

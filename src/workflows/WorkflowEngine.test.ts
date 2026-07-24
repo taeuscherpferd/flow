@@ -16,7 +16,10 @@ import type {
 import { WorkflowEngine } from "#src/workflows/WorkflowEngine.js";
 import { WorkflowRegistry } from "#src/workflows/WorkflowRegistry.js";
 import { WorkflowRunStore } from "#src/workflows/WorkflowRunStore.js";
-import type { WorkflowHumanAdapter } from "#src/workflows/types.js";
+import type {
+  WorkflowAgentRunOptions,
+  WorkflowHumanAdapter,
+} from "#src/workflows/types.js";
 
 const fakeProvider: ModelProvider = {
   id: "fake",
@@ -35,7 +38,7 @@ class FakeSession implements WorkflowAgentSessionRuntime {
   constructor(
     readonly id: string,
     model: string,
-    private readonly onRun: () => void,
+    private readonly onRun: (options?: WorkflowAgentRunOptions) => void,
     history: ChatMessage[] = [{ role: "system", content: "test" }],
   ) {
     this.modelName = model.includes("/")
@@ -48,8 +51,11 @@ class FakeSession implements WorkflowAgentSessionRuntime {
     return { provider: this.provider, model: this.modelName };
   }
 
-  async run(prompt: string): Promise<string> {
-    this.onRun();
+  async run(
+    prompt: string,
+    options?: WorkflowAgentRunOptions,
+  ): Promise<string> {
+    this.onRun(options);
     const content = `${this.modelName}:${prompt}`;
     this.history.push({ role: "user", content: prompt });
     this.history.push({ role: "assistant", content });
@@ -77,6 +83,7 @@ class FakeSession implements WorkflowAgentSessionRuntime {
 class FakeAgentRuntime implements WorkflowAgentRuntime {
   private nextId = 1;
   runCount = 0;
+  readonly runOptions: Array<WorkflowAgentRunOptions | undefined> = [];
 
   createSession(
     modelSpec: string,
@@ -86,8 +93,9 @@ class FakeAgentRuntime implements WorkflowAgentRuntime {
     return new FakeSession(
       sessionId ?? `session-${this.nextId++}`,
       modelSpec,
-      () => {
+      (options) => {
         this.runCount += 1;
+        this.runOptions.push(options);
       },
       history,
     );
@@ -250,6 +258,74 @@ test("ordinary agent calls rerun unless wrapped in a checkpoint", async () => {
       humanAdapter: textResponse("yes"),
     });
     assert.equal(runtime.agent.runCount, 2);
+  } finally {
+    await dispose(runtime);
+  }
+});
+
+test("forwards workflow agent thinking options to the runtime session", async () => {
+  const runtime = await createRuntime();
+
+  try {
+    await writeWorkflow(
+      runtime,
+      "thinking",
+      `async run(context) {
+        const agent = await context.agents.create({ model: "small" });
+        const response = await agent.run("review", {
+          tools: "none",
+          thinking: "high",
+        });
+        return response.content;
+      }`,
+    );
+
+    const result = await runtime.engine.start("thinking", "");
+
+    assert.equal(result.run.status, "completed");
+    assert.deepEqual(runtime.agent.runOptions, [
+      { tools: "none", thinking: "high" },
+    ]);
+  } finally {
+    await dispose(runtime);
+  }
+});
+
+test("scopes elevation thinking to runs inside the operation", async () => {
+  const runtime = await createRuntime();
+
+  try {
+    await writeWorkflow(
+      runtime,
+      "elevation-thinking",
+      `async run(context) {
+        const agent = await context.agents.create({ model: "small" });
+        await context.elevate({
+          model: "reviewer",
+          thinking: "high",
+          attempts: 1,
+          context: { mode: "reuse", session: agent },
+          operation: async ({ session }) => {
+            await session.run("elevated review");
+            return (await session.run("fast verification", {
+              thinking: "off",
+            })).content;
+          },
+          check: () => true,
+        });
+        await agent.run("ordinary follow-up");
+        return "complete";
+      }`,
+    );
+
+    const result = await runtime.engine.start("elevation-thinking", "");
+
+    assert.equal(result.run.status, "completed");
+    assert.deepEqual(runtime.agent.runOptions, [
+      { tools: "default", thinking: "high" },
+      { tools: "default", thinking: "off" },
+      { tools: "default" },
+    ]);
   } finally {
     await dispose(runtime);
   }

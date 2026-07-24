@@ -213,6 +213,9 @@ export class WorkflowExecutionContext implements WorkflowContext {
     const session = await this.agentCoordinator.resolveElevationSession(
       options.model,
       options.context,
+      options.thinking === undefined
+        ? {}
+        : { thinking: options.thinking },
     );
     const results: TValue[] = [];
     const checks: WorkflowCheckDetails[] = [];

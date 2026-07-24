@@ -86,6 +86,7 @@ export default defineWorkflow<ReviewInput>({
 
     const result = await context.elevate({
       model: "reviewer",
+      thinking: "high",
       attempts: 2,
       context: { mode: "fresh" },
       operation: async ({ session, attempt, previousResults }) => ({
@@ -131,6 +132,9 @@ workflows receive validated JSON:
 - Calling `run` repeatedly on the same session shares its history.
 - `context.agents.fork(session, ...)` copies the current history and then
   diverges.
+- Each `run` can select `thinking: "off"`, `"on"`, `"low"`, `"medium"`, or
+  `"high"` when the model supports it. See [docs/workflows.md](docs/workflows.md)
+  for the full per-turn behavior.
 
 Model selectors accept `provider/model`, a unique bare model name, or an
 unlimited user-defined alias:

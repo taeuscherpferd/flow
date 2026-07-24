@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ChatRole,
   ModelProvider,
+  ThinkingMode,
   ToolCall,
   ToolDef,
 } from "#src/providers/types.js";
@@ -16,6 +17,7 @@ interface OllamaWireToolCall {
 interface OllamaWireMessage {
   role: string;
   content: string;
+  thinking?: string;
   tool_calls?: OllamaWireToolCall[];
 }
 
@@ -24,6 +26,7 @@ interface OllamaChatRequestBody {
   messages: OllamaWireMessage[];
   tools?: ToolDef[];
   stream: false;
+  think?: boolean | "low" | "medium" | "high";
   options?: { num_ctx: number };
 }
 
@@ -47,6 +50,9 @@ function synthesizeToolCall(raw: OllamaWireToolCall): ToolCall {
 
 function toWireMessage(message: ChatMessage): OllamaWireMessage {
   const wire: OllamaWireMessage = { role: message.role, content: message.content };
+  if (message.thinking && message.thinking.length > 0) {
+    wire.thinking = message.thinking;
+  }
   if (message.toolCalls && message.toolCalls.length > 0) {
     wire.tool_calls = message.toolCalls.map((call) => ({
       function: { name: call.name, arguments: call.arguments },
@@ -61,10 +67,31 @@ function fromWireMessage(message: OllamaWireMessage): ChatMessage {
     role: message.role as ChatRole,
     content: message.content,
   };
+  if (message.thinking && message.thinking.length > 0) {
+    result.thinking = message.thinking;
+  }
   if (toolCalls && toolCalls.length > 0) {
     result.toolCalls = toolCalls;
   }
   return result;
+}
+
+function toOllamaThinking(
+  thinking: ThinkingMode | undefined,
+): boolean | "low" | "medium" | "high" | undefined {
+  switch (thinking) {
+    case undefined:
+    case "default":
+      return undefined;
+    case "off":
+      return false;
+    case "on":
+      return true;
+    case "low":
+    case "medium":
+    case "high":
+      return thinking;
+  }
 }
 
 export class OllamaProvider implements ModelProvider {
@@ -83,6 +110,10 @@ export class OllamaProvider implements ModelProvider {
     }
     if (request.options?.numCtx !== undefined) {
       body.options = { num_ctx: request.options.numCtx };
+    }
+    const thinking = toOllamaThinking(request.options?.thinking);
+    if (thinking !== undefined) {
+      body.think = thinking;
     }
 
     let response: Response;

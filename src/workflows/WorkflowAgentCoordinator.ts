@@ -10,6 +10,21 @@ import type {
   WorkflowAgentsApi,
 } from "#src/workflows/types.js";
 
+interface RuntimeAgentSessionState {
+  tail: Promise<void>;
+}
+
+function mergeRunOptions(
+  defaults: WorkflowAgentRunOptions,
+  options?: WorkflowAgentRunOptions,
+): WorkflowAgentRunOptions {
+  const thinking = options?.thinking ?? defaults.thinking;
+  return {
+    tools: options?.tools ?? defaults.tools ?? "default",
+    ...(thinking === undefined ? {} : { thinking }),
+  };
+}
+
 export interface WorkflowAgentSessionRuntime {
   readonly id: string;
   getModel(): { provider: string; model: string };
@@ -45,11 +60,13 @@ export interface WorkflowAgentRuntime {
 }
 
 class RuntimeAgentSession implements WorkflowAgentSession {
-  private tail: Promise<void> = Promise.resolve();
-
   constructor(
     private readonly coordinator: WorkflowAgentCoordinator,
     readonly internal: WorkflowAgentSessionRuntime,
+    private readonly runDefaults: WorkflowAgentRunOptions = {},
+    private readonly state: RuntimeAgentSessionState = {
+      tail: Promise.resolve(),
+    },
   ) {}
 
   get id(): string {
@@ -64,16 +81,33 @@ class RuntimeAgentSession implements WorkflowAgentSession {
     prompt: string,
     options?: WorkflowAgentRunOptions,
   ): Promise<WorkflowAgentResponse> {
-    return this.enqueue(() => this.coordinator.run(this, prompt, options));
+    return this.enqueue(() =>
+      this.coordinator.run(
+        this,
+        prompt,
+        mergeRunOptions(this.runDefaults, options),
+      ),
+    );
   }
 
   enqueue<TResult>(operation: () => Promise<TResult>): Promise<TResult> {
-    const result = this.tail.then(operation);
-    this.tail = result.then(
+    const result = this.state.tail.then(operation);
+    this.state.tail = result.then(
       () => undefined,
       () => undefined,
     );
     return result;
+  }
+
+  withRunDefaults(
+    runDefaults: WorkflowAgentRunOptions,
+  ): RuntimeAgentSession {
+    return new RuntimeAgentSession(
+      this.coordinator,
+      this.internal,
+      runDefaults,
+      this.state,
+    );
   }
 }
 
@@ -105,7 +139,12 @@ export class WorkflowAgentCoordinator {
     try {
       content = await session.internal.run(
         prompt,
-        { tools: options.tools ?? "default" },
+        {
+          tools: options.tools ?? "default",
+          ...(options.thinking === undefined
+            ? {}
+            : { thinking: options.thinking }),
+        },
         this.signal,
       );
     } catch (error) {
@@ -122,12 +161,21 @@ export class WorkflowAgentCoordinator {
   async resolveElevationSession(
     model: string,
     context: ElevationContext,
+    runDefaults: WorkflowAgentRunOptions = {},
   ): Promise<WorkflowAgentSession> {
-    if (context.mode === "fresh") return this.create({ model });
-    const source = this.asRuntimeSession(context.session);
-    if (context.mode === "fork") return this.fork(source, { model });
-    await this.retarget(source, model);
-    return source;
+    let session: WorkflowAgentSession;
+    if (context.mode === "fresh") {
+      session = await this.create({ model });
+    } else {
+      const source = this.asRuntimeSession(context.session);
+      if (context.mode === "fork") {
+        session = await this.fork(source, { model });
+      } else {
+        await this.retarget(source, model);
+        session = source;
+      }
+    }
+    return this.asRuntimeSession(session).withRunDefaults(runDefaults);
   }
 
   private async create(

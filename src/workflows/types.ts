@@ -104,8 +104,17 @@ export interface WorkflowOutputApi {
   ): WorkflowOutputValue<TValue>;
 }
 
+export type WorkflowThinking =
+  | "default"
+  | "off"
+  | "on"
+  | "low"
+  | "medium"
+  | "high";
+
 export interface WorkflowAgentRunOptions {
   tools?: "default" | "none";
+  thinking?: WorkflowThinking;
 }
 
 export interface WorkflowAgentResponse {
@@ -168,6 +177,7 @@ export interface ElevationOptions<
   TFallback extends JsonValue = TValue,
 > {
   model: string;
+  thinking?: WorkflowThinking;
   attempts: number;
   context: ElevationContext;
   operation(attempt: ElevationAttempt<TValue>): Promise<TValue>;
