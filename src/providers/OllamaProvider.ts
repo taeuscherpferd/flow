@@ -7,9 +7,10 @@ import type {
   ToolCall,
   ToolDef,
 } from "./types.js";
+import type { JsonObject } from "../workflows/types.js";
 
 interface OllamaWireToolCall {
-  function: { name: string; arguments: Record<string, unknown> };
+  function: { name: string; arguments: JsonObject };
 }
 
 interface OllamaWireMessage {
@@ -90,6 +91,7 @@ export class OllamaProvider implements ModelProvider {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
       });
     } catch (err) {
       throw new OllamaProviderError(

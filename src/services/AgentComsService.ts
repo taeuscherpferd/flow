@@ -12,10 +12,14 @@ export class AgentComsService {
     private model: string,
     private contextWindow: number,
     private readonly toolRegistry: ToolRegistry,
-    systemPrompt: string,
+    systemPromptOrHistory: string | ChatMessage[],
     private readonly toolCtx: ToolExecutionContext,
   ) {
-    this.history.push({ role: "system", content: systemPrompt });
+    if (typeof systemPromptOrHistory === "string") {
+      this.history.push({ role: "system", content: systemPromptOrHistory });
+    } else {
+      this.history.push(...structuredClone(systemPromptOrHistory));
+    }
   }
 
   getModel(): string {
@@ -28,7 +32,12 @@ export class AgentComsService {
     this.contextWindow = contextWindow;
   }
 
-  async handleUserMessage(userText: string): Promise<string> {
+  async handleUserMessage(
+    userText: string,
+    signal?: AbortSignal,
+    tools: "default" | "none" = "default",
+  ): Promise<string> {
+    signal?.throwIfAborted();
     this.history.push({ role: "user", content: userText });
 
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
@@ -37,21 +46,39 @@ export class AgentComsService {
         result = await this.provider.chat({
           model: this.model,
           messages: this.history,
-          tools: this.toolRegistry.getToolDefs(),
+          ...(tools === "default"
+            ? { tools: this.toolRegistry.getToolDefs() }
+            : {}),
           options: { numCtx: this.contextWindow },
+          ...(signal === undefined ? {} : { signal }),
         });
       } catch (err) {
+        if (signal?.aborted) throw err;
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       }
 
-      this.history.push(result.message);
+      signal?.throwIfAborted();
+      this.history.push(
+        tools === "none"
+          ? {
+              role: result.message.role,
+              content: result.message.content,
+            }
+          : result.message,
+      );
 
-      if (!result.message.toolCalls || result.message.toolCalls.length === 0) {
+      if (
+        tools === "none" ||
+        !result.message.toolCalls ||
+        result.message.toolCalls.length === 0
+      ) {
         return result.message.content;
       }
 
       for (const call of result.message.toolCalls) {
-        const toolResult = await this.executeToolCall(call);
+        signal?.throwIfAborted();
+        const toolResult = await this.executeToolCall(call, signal);
+        signal?.throwIfAborted();
         this.history.push({
           role: "tool",
           content: toolResult.content,
@@ -64,12 +91,22 @@ export class AgentComsService {
     return "I hit my internal tool-call limit for this turn — try rephrasing or breaking the task down.";
   }
 
-  /** Resets the conversation, keeping only the system prompt at index 0. */
-  clearHistory(): void {
+  clearHistory(systemContexts: string[] = []): void {
     this.history.length = 1;
+    for (const content of systemContexts) {
+      this.injectSystemContext(content);
+    }
   }
 
-  /** Injects a skill's full body as context without triggering a model round-trip. */
+  snapshotHistory(): ChatMessage[] {
+    return structuredClone(this.history);
+  }
+
+  restoreHistory(history: ChatMessage[]): void {
+    this.history.length = 0;
+    this.history.push(...structuredClone(history));
+  }
+
   injectSkillBody(name: string, body: string): void {
     this.history.push({
       role: "user",
@@ -77,20 +114,31 @@ export class AgentComsService {
     });
   }
 
-  private async executeToolCall(call: ToolCall): Promise<ToolResult> {
+  injectSystemContext(content: string): void {
+    if (content.trim().length === 0) return;
+    this.history.push({ role: "system", content });
+  }
+
+  private async executeToolCall(
+    call: ToolCall,
+    signal?: AbortSignal,
+  ): Promise<ToolResult> {
     const tool = this.toolRegistry.get(call.name);
     if (!tool) {
       return { ok: false, content: `Error: no such tool "${call.name}"` };
     }
 
+    signal?.throwIfAborted();
     const allowed = await this.toolCtx.requestPermission(call.name, call.arguments);
+    signal?.throwIfAborted();
     if (!allowed) {
       return { ok: false, content: `Permission denied for tool "${call.name}".` };
     }
 
     try {
-      return await tool.execute(call.arguments, this.toolCtx);
+      return await tool.execute(call.arguments, this.toolCtx, signal);
     } catch (err) {
+      if (signal?.aborted) throw err;
       return { ok: false, content: `Error executing "${call.name}": ${String(err)}` };
     }
   }

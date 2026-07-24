@@ -3,13 +3,42 @@ import { ConfigService } from "../services/ConfigService.js";
 import { ModelSetupService } from "../services/ModelSetupService.js";
 import { EOF, ghostPrompt } from "../ui/lineEditor.js";
 import { startSpinner } from "../ui/spinner.js";
+import { WorkflowRegistry } from "../workflows/WorkflowRegistry.js";
+import {
+  WorkflowCliController,
+  type WorkflowCliUi,
+} from "./WorkflowCliController.js";
 
-const BUILTIN_COMMANDS = ["help", "clear", "model", "exit", "quit"];
+const BUILTIN_COMMANDS = [
+  "help",
+  "clear",
+  "model",
+  "workflows",
+  "workflow",
+  "runs",
+  "workflow-debug",
+  "run",
+  "resume",
+  "cancel",
+  "exit",
+  "quit",
+];
 
 const HELP_TEXT = `Commands:
   /help            Show this help
   /clear           Clear the conversation context
   /model [name]    Set up the first model, list models, or switch to <name>
+  /workflows       List discovered workflows
+  /workflow <name> [input]
+                    Run a workflow
+  /<workflow-name> [input]
+                    Run a workflow by its top-level alias
+  /runs            List recent workflow runs
+  /workflow-debug [on|off]
+                    Show or hide live workflow and agent status messages
+  /run <id>        Inspect a workflow run
+  /resume <id>     Resume a paused or interrupted workflow run
+  /cancel <id>     Cancel a workflow run
   /exit, /quit     Exit the REPL
   /<skill-name>    Manually load a skill's full instructions into context`;
 
@@ -20,17 +49,20 @@ const WELCOME_TEXT =
 
 export class FlowCli {
   private agent: Agent | undefined;
+  private workflowRegistry: WorkflowRegistry | undefined;
+  private workflowController: WorkflowCliController | undefined;
+  private stopActiveSpinner: (() => void) | undefined;
 
   constructor(private readonly configService = new ConfigService()) {}
 
   async run(): Promise<void> {
     if (!(await this.initialize())) return;
-
     console.log(this.agent ? READY_TEXT : WELCOME_TEXT);
 
     try {
       await this.runPromptLoop();
     } finally {
+      await this.workflowController?.shutdown();
       if (process.stdin.isTTY) process.stdin.setRawMode(false);
     }
   }
@@ -38,8 +70,19 @@ export class FlowCli {
   private async initialize(): Promise<boolean> {
     try {
       const config = await this.configService.load();
+      this.workflowRegistry = new WorkflowRegistry({
+        globalDir: config.globalDir,
+        projectDir: config.projectDir,
+      });
+      await this.workflowRegistry.load();
       if (this.configService.hasConfiguredDefaultModel(config.models)) {
         this.agent = await Agent.create(this.configService);
+        this.workflowController = WorkflowCliController.create(
+          this.agent,
+          this.workflowRegistry,
+          config.globalDir,
+          this.workflowUi(),
+        );
       }
       return true;
     } catch (error) {
@@ -66,6 +109,9 @@ export class FlowCli {
   private getCommands(): string[] {
     return [
       ...BUILTIN_COMMANDS,
+      ...(this.workflowRegistry?.list().map(
+        (record) => record.definition.name,
+      ) ?? []),
       ...(this.agent?.listSkillNames() ?? []),
     ];
   }
@@ -75,25 +121,76 @@ export class FlowCli {
       await this.respondToUser(line);
       return false;
     }
-
     return this.handleCommand(line.slice(1).trim());
   }
 
   private async handleCommand(command: string): Promise<boolean> {
     if (command === "exit" || command === "quit") return true;
-
     if (command === "clear") {
       this.clearHistory();
       return false;
     }
-
     if (command === "help") {
       this.showHelp();
       return false;
     }
-
     if (command === "model" || command.startsWith("model ")) {
       await this.handleModelCommand(command.slice("model".length).trim());
+      return false;
+    }
+    if (command === "workflows") {
+      this.showWorkflows();
+      return false;
+    }
+    if (command === "workflow" || command.startsWith("workflow ")) {
+      await this.getWorkflowControllerOrShowWelcome()?.handleWorkflowCommand(
+        command.slice("workflow".length).trim(),
+      );
+      return false;
+    }
+    if (command === "runs") {
+      this.getWorkflowControllerOrShowWelcome()?.showRuns();
+      return false;
+    }
+    if (
+      command === "workflow-debug" ||
+      command.startsWith("workflow-debug ")
+    ) {
+      this.getWorkflowControllerOrShowWelcome()?.setDebugLogging(
+        command.slice("workflow-debug".length).trim(),
+      );
+      return false;
+    }
+    if (command === "run" || command.startsWith("run ")) {
+      await this.getWorkflowControllerOrShowWelcome()?.inspectRun(
+        command.slice("run".length).trim(),
+      );
+      return false;
+    }
+    if (command === "resume" || command.startsWith("resume ")) {
+      await this.getWorkflowControllerOrShowWelcome()?.resumeRun(
+        command.slice("resume".length).trim(),
+      );
+      return false;
+    }
+    if (command === "cancel" || command.startsWith("cancel ")) {
+      this.getWorkflowControllerOrShowWelcome()?.cancelRun(
+        command.slice("cancel".length).trim(),
+      );
+      return false;
+    }
+
+    const commandName = command.split(/\s/, 1)[0] ?? "";
+    if (this.agent?.listSkillNames().includes(commandName)) {
+      await this.handleSkillCommand(command);
+      return false;
+    }
+    const workflow = this.workflowRegistry?.get(commandName);
+    if (workflow && this.workflowController) {
+      await this.workflowController.runWorkflow(
+        workflow,
+        command.slice(commandName.length).trim(),
+      );
       return false;
     }
 
@@ -104,7 +201,6 @@ export class FlowCli {
   private clearHistory(): void {
     const agent = this.getAgentOrShowWelcome();
     if (!agent) return;
-
     agent.clearHistory();
     console.log("Context cleared.");
   }
@@ -119,6 +215,23 @@ export class FlowCli {
     );
   }
 
+  private showWorkflows(): void {
+    if (this.workflowController) {
+      this.workflowController.showWorkflows();
+      return;
+    }
+    const workflows = this.workflowRegistry?.list() ?? [];
+    if (workflows.length === 0) {
+      console.log("No workflows discovered.");
+      return;
+    }
+    for (const workflow of workflows) {
+      console.log(
+        `  ${workflow.definition.name} — ${workflow.definition.description}`,
+      );
+    }
+  }
+
   private async handleModelCommand(requested: string): Promise<void> {
     if (!this.agent) {
       await this.setupFirstModel();
@@ -127,7 +240,6 @@ export class FlowCli {
 
     const current = this.agent.getCurrentModel();
     const available = this.agent.listModels();
-
     if (requested.length === 0) {
       console.log(`Current model: ${current.provider}/${current.model}`);
       console.log("Available:");
@@ -141,19 +253,16 @@ export class FlowCli {
       return;
     }
 
-    const currentModel = `${current.provider}/${current.model}`;
-    if (requested === current.model || requested === currentModel) {
-      console.log(`Already using "${currentModel}".`);
-      return;
-    }
-
     const result = this.agent.setModel(requested);
     if (!result.ok) {
       console.log(result.error);
       return;
     }
-
     const active = this.agent.getCurrentModel();
+    if (!result.changed) {
+      console.log(`Already using "${active.provider}/${active.model}".`);
+      return;
+    }
     console.log(`Switched model to "${active.provider}/${active.model}".`);
   }
 
@@ -164,7 +273,6 @@ export class FlowCli {
       (message) => console.log(message),
     );
     const result = await setupService.run();
-
     if (result.status === "cancelled") {
       console.log("Setup cancelled. Use /model when you're ready.");
       return;
@@ -173,9 +281,20 @@ export class FlowCli {
     console.log(
       `Configured "${result.provider}/${result.model}" in ${result.configPath}.`,
     );
-
     try {
       this.agent = await Agent.create(this.configService);
+      const config = await this.configService.load();
+      this.workflowRegistry = new WorkflowRegistry({
+        globalDir: config.globalDir,
+        projectDir: config.projectDir,
+      });
+      await this.workflowRegistry.load();
+      this.workflowController = WorkflowCliController.create(
+        this.agent,
+        this.workflowRegistry,
+        config.globalDir,
+        this.workflowUi(),
+      );
       console.log(READY_TEXT);
     } catch (error) {
       console.error(
@@ -189,7 +308,6 @@ export class FlowCli {
   private async handleSkillCommand(command: string): Promise<void> {
     const agent = this.getAgentOrShowWelcome();
     if (!agent) return;
-
     const firstSpace = command.search(/\s/);
     const skillName =
       firstSpace === -1 ? command : command.slice(0, firstSpace);
@@ -200,7 +318,6 @@ export class FlowCli {
       console.log(`Unknown command or skill: /${skillName}`);
       return;
     }
-
     console.log(`Loaded skill: ${skillName}`);
     if (promptText.length > 0) await this.respondToUser(promptText);
   }
@@ -209,16 +326,47 @@ export class FlowCli {
     const agent = this.getAgentOrShowWelcome();
     if (!agent) return;
 
-    const stopSpinner = startSpinner();
+    this.startActiveSpinner();
     try {
       console.log(await agent.handleUserMessage(text));
     } finally {
-      stopSpinner();
+      this.stopSpinner();
     }
+  }
+
+  private workflowUi(): WorkflowCliUi {
+    return {
+      pauseSpinner: () => this.pauseSpinner(),
+      resumeSpinner: () => this.startActiveSpinner(),
+      startSpinner: () => this.startActiveSpinner(),
+      stopSpinner: () => this.stopSpinner(),
+    };
+  }
+
+  private pauseSpinner(): boolean {
+    const hadSpinner = this.stopActiveSpinner !== undefined;
+    this.stopSpinner();
+    return hadSpinner;
+  }
+
+  private startActiveSpinner(): void {
+    this.stopActiveSpinner ??= startSpinner();
+  }
+
+  private stopSpinner(): void {
+    this.stopActiveSpinner?.();
+    this.stopActiveSpinner = undefined;
   }
 
   private getAgentOrShowWelcome(): Agent | undefined {
     if (!this.agent) console.log(WELCOME_TEXT);
     return this.agent;
+  }
+
+  private getWorkflowControllerOrShowWelcome():
+    | WorkflowCliController
+    | undefined {
+    if (!this.workflowController) console.log(WELCOME_TEXT);
+    return this.workflowController;
   }
 }

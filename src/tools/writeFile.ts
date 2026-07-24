@@ -20,7 +20,7 @@ export const writeFileTool: Tool = {
     },
     required: ["path", "content"],
   },
-  async execute(args, ctx) {
+  async execute(args, ctx, signal) {
     const filePath = args["path"];
     const content = args["content"];
     if (typeof filePath !== "string" || filePath.trim().length === 0) {
@@ -32,8 +32,13 @@ export const writeFileTool: Tool = {
 
     const resolved = path.resolve(ctx.cwd, filePath);
     try {
+      signal?.throwIfAborted();
       await mkdir(path.dirname(resolved), { recursive: true });
-      await fsWriteFile(resolved, content, "utf-8");
+      signal?.throwIfAborted();
+      await fsWriteFile(resolved, content, {
+        encoding: "utf-8",
+        ...(signal === undefined ? {} : { signal }),
+      });
       return { ok: true, content: `Wrote ${content.length} characters to "${filePath}".` };
     } catch (err) {
       return { ok: false, content: `Error writing "${filePath}": ${String(err)}` };

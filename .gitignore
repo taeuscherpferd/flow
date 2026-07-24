@@ -6,6 +6,10 @@
 /dist
 /build
 
+# Generated workflow support files
+/.work-agent/package.json
+/.work-agent/workflows/tsconfig.json
+
 # Environment / Secrets
 .env
 *.local

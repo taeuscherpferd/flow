@@ -1,14 +1,22 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { OllamaProvider } from "../providers/OllamaProvider.js";
-import type { ModelProvider } from "../providers/types.js";
+import type { ChatMessage, ModelProvider } from "../providers/types.js";
 import { AgentComsService } from "../services/AgentComsService.js";
 import type { ModelsConfig, ProviderConfig } from "../services/ConfigService.js";
 import { ConfigService } from "../services/ConfigService.js";
 import { EnvSecretsProvider } from "../services/SecretsProvider.js";
 import type { SkillFrontmatter } from "../services/SkillsService.js";
 import { SkillsService } from "../services/SkillsService.js";
+import {
+  buildWorkflowSystemContext,
+  createRunWorkflowTool,
+  type WorkflowToolRuntime,
+} from "../tools/runWorkflow.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 import type { ToolExecutionContext } from "../tools/types.js";
+import type { JsonValue, WorkflowRecord } from "../workflows/types.js";
+import { AgentSession } from "./AgentSession.js";
 
 function buildSystemPrompt(
   soul: string,
@@ -53,12 +61,17 @@ export interface ModelRef {
 
 export class Agent {
   private currentProvider: string;
+  private workflowSystemContext = "";
 
   private constructor(
     private readonly skillsService: SkillsService,
     private readonly agentComs: AgentComsService,
     private readonly models: ModelsConfig,
     private readonly providers: Map<string, ModelProvider>,
+    private readonly baseToolRegistry: ToolRegistry,
+    private readonly mainToolRegistry: ToolRegistry,
+    private readonly systemPrompt: string,
+    private readonly toolCtx: ToolExecutionContext,
     initialProvider: string,
   ) {
     this.currentProvider = initialProvider;
@@ -96,7 +109,8 @@ export class Agent {
       providers.set(name, createProvider(name, cfg));
     }
 
-    const toolRegistry = new ToolRegistry(skillsService);
+    const baseToolRegistry = new ToolRegistry(skillsService);
+    const mainToolRegistry = new ToolRegistry(skillsService);
     const systemPrompt = buildSystemPrompt(config.soul, config.agentsInstructions, skillsService.listSkills());
 
     const toolCtx: ToolExecutionContext = {
@@ -109,12 +123,22 @@ export class Agent {
       providers.get(config.models.defaultProvider)!,
       config.models.defaultModel,
       modelEntry.contextWindow,
-      toolRegistry,
+      mainToolRegistry,
       systemPrompt,
       toolCtx,
     );
 
-    return new Agent(skillsService, agentComs, config.models, providers, config.models.defaultProvider);
+    return new Agent(
+      skillsService,
+      agentComs,
+      config.models,
+      providers,
+      baseToolRegistry,
+      mainToolRegistry,
+      systemPrompt,
+      toolCtx,
+      config.models.defaultProvider,
+    );
   }
 
   /** Lists every configured model across all providers, flagging the active one. */
@@ -133,55 +157,118 @@ export class Agent {
     return refs;
   }
 
-  /** Returns the provider and model currently in use. */
   getCurrentModel(): { provider: string; model: string } {
     return { provider: this.currentProvider, model: this.agentComs.getModel() };
   }
 
-  /**
-   * Switches the active model. `spec` may be provider-qualified ("ollama/llama3.1")
-   * or a bare model name, which is accepted only if it's unique across providers.
-   * History is preserved across the swap. Returns { ok: true } on success, or
-   * { ok: false, error } describing why the swap was rejected.
-   */
-  setModel(spec: string): { ok: true } | { ok: false; error: string } {
-    const slash = spec.indexOf("/");
-
-    let providerName: string;
-    let modelName: string;
-    if (slash !== -1) {
-      providerName = spec.slice(0, slash).trim();
-      modelName = spec.slice(slash + 1).trim();
-      const cfg = this.models.providers[providerName];
-      if (!cfg) return { ok: false, error: `Unknown provider "${providerName}".` };
-      if (!cfg.models.some((m) => m.name === modelName)) {
-        return { ok: false, error: `Provider "${providerName}" has no model "${modelName}".` };
-      }
-    } else {
-      // Bare model name: resolve against all providers, requiring a unique match.
-      const matches = this.listModels().filter((r) => r.model === spec);
-      if (matches.length === 0) return { ok: false, error: `Unknown model "${spec}".` };
-      if (matches.length > 1) {
-        const qualified = matches.map((m) => `${m.provider}/${m.model}`).join(", ");
-        return {
-          ok: false,
-          error: `Model "${spec}" exists in multiple providers — qualify it: ${qualified}.`,
-        };
-      }
-      providerName = matches[0]!.provider;
-      modelName = matches[0]!.model;
-    }
-
-    const contextWindow = this.models.providers[providerName]!.models.find(
-      (m) => m.name === modelName,
-    )!.contextWindow;
+  setModel(
+    spec: string,
+  ): { ok: true; changed: boolean } | { ok: false; error: string } {
+    const resolved = this.resolveModel(spec);
+    if (!resolved.ok) return resolved;
+    const { providerName, modelName, contextWindow } = resolved;
+    const changed =
+      this.currentProvider !== providerName ||
+      this.agentComs.getModel() !== modelName;
     this.agentComs.setModel(this.providers.get(providerName)!, modelName, contextWindow);
     this.currentProvider = providerName;
-    return { ok: true };
+    return { ok: true, changed };
+  }
+
+  createSession(
+    modelSpec: string,
+    history?: ChatMessage[],
+    sessionId: string = randomUUID(),
+    workflowAccess: "disabled" | "eligible" = "disabled",
+  ): AgentSession {
+    const resolved = this.resolveModel(modelSpec);
+    if (!resolved.ok) throw new Error(resolved.error);
+
+    const agentComs = new AgentComsService(
+      this.providers.get(resolved.providerName)!,
+      resolved.modelName,
+      resolved.contextWindow,
+      workflowAccess === "eligible"
+        ? this.mainToolRegistry
+        : this.baseToolRegistry,
+      history ?? this.systemPrompt,
+      this.toolCtx,
+    );
+    if (
+      workflowAccess === "eligible" &&
+      this.workflowSystemContext.length > 0 &&
+      !agentComs
+        .snapshotHistory()
+        .some(
+          (message) =>
+            message.role === "system" &&
+            message.content === this.workflowSystemContext,
+        )
+    ) {
+      agentComs.injectSystemContext(this.workflowSystemContext);
+    }
+
+    return new AgentSession(
+      sessionId,
+      resolved.providerName,
+      agentComs,
+    );
+  }
+
+  forkSession(
+    session: AgentSession,
+    modelSpec?: string,
+    workflowAccess: "disabled" | "eligible" = "disabled",
+  ): AgentSession {
+    const current = session.getModel();
+    return this.createSession(
+      modelSpec ?? `${current.provider}/${current.model}`,
+      session.snapshotHistory(),
+      randomUUID(),
+      workflowAccess,
+    );
+  }
+
+  configureWorkflows(
+    workflows: WorkflowRecord[],
+    runtime: WorkflowToolRuntime,
+  ): void {
+    const context = buildWorkflowSystemContext(workflows);
+    if (context.length === 0) return;
+    this.workflowSystemContext = context;
+    this.mainToolRegistry.register(createRunWorkflowTool(workflows, runtime));
+    this.agentComs.injectSystemContext(context);
+  }
+
+  retargetSession(session: AgentSession, modelSpec: string): void {
+    const resolved = this.resolveModel(modelSpec);
+    if (!resolved.ok) throw new Error(resolved.error);
+    session.retarget(
+      resolved.providerName,
+      this.providers.get(resolved.providerName)!,
+      resolved.modelName,
+      resolved.contextWindow,
+    );
   }
 
   async handleUserMessage(text: string): Promise<string> {
     return this.agentComs.handleUserMessage(text);
+  }
+
+  async presentWorkflowResult(
+    workflowName: string,
+    value: JsonValue,
+  ): Promise<string> {
+    const current = this.getCurrentModel();
+    const presentationSession = this.createSession(
+      `${current.provider}/${current.model}`,
+    );
+    return presentationSession.run(
+      `Workflow "${workflowName}" completed with this durable JSON result:\n\n` +
+        `${JSON.stringify(value, null, 2)}\n\n` +
+        "Present the result clearly to the user. Do not run another workflow.",
+      { tools: "none" },
+    );
   }
 
   /** Loads a skill's full body into context immediately, bypassing the model's own load_skill judgment. Returns false if no such skill exists. */
@@ -198,6 +285,70 @@ export class Agent {
 
   /** Clears the conversation history back to the initial system prompt. */
   clearHistory(): void {
-    this.agentComs.clearHistory();
+    this.agentComs.clearHistory(
+      this.workflowSystemContext.length === 0
+        ? []
+        : [this.workflowSystemContext],
+    );
+  }
+
+  private resolveModel(
+    requestedSpec: string,
+  ):
+    | {
+        ok: true;
+        providerName: string;
+        modelName: string;
+        contextWindow: number;
+      }
+    | { ok: false; error: string } {
+    const aliasTarget = this.models.modelAliases?.[requestedSpec];
+    const spec = aliasTarget ?? requestedSpec;
+    const slash = spec.indexOf("/");
+
+    let providerName: string;
+    let modelName: string;
+    if (slash !== -1) {
+      providerName = spec.slice(0, slash).trim();
+      modelName = spec.slice(slash + 1).trim();
+      const config = this.models.providers[providerName];
+      if (!config) {
+        return { ok: false, error: `Unknown provider "${providerName}".` };
+      }
+      if (!config.models.some((model) => model.name === modelName)) {
+        return {
+          ok: false,
+          error: `Provider "${providerName}" has no model "${modelName}".`,
+        };
+      }
+    } else {
+      const matches = this.listModels().filter(
+        (reference) => reference.model === spec,
+      );
+      if (matches.length === 0) {
+        return { ok: false, error: `Unknown model "${requestedSpec}".` };
+      }
+      if (matches.length > 1) {
+        const qualified = matches
+          .map((match) => `${match.provider}/${match.model}`)
+          .join(", ");
+        return {
+          ok: false,
+          error: `Model "${requestedSpec}" exists in multiple providers — qualify it: ${qualified}.`,
+        };
+      }
+      providerName = matches[0]!.provider;
+      modelName = matches[0]!.model;
+    }
+
+    const contextWindow = this.models.providers[
+      providerName
+    ]!.models.find((model) => model.name === modelName)!.contextWindow;
+    return {
+      ok: true,
+      providerName,
+      modelName,
+      contextWindow,
+    };
   }
 }

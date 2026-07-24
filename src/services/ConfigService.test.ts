@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -66,6 +66,35 @@ test("saves a model setup as the active global model", async () => {
       baseUrl: "http://localhost:11434",
       models: [{ name: "qwen3:8b", contextWindow: 16384 }],
     });
+  } finally {
+    await rm(testConfig.rootDir, { recursive: true, force: true });
+  }
+});
+
+test("merges project model aliases and validates their targets", async () => {
+  const testConfig = await createTestConfig();
+
+  try {
+    await testConfig.service.saveModelSetup({
+      provider: "local",
+      baseUrl: "http://localhost:11434",
+      model: "qwen3:8b",
+      contextWindow: 16384,
+    });
+    await mkdir(path.join(testConfig.rootDir, "project"), { recursive: true });
+    await writeFile(
+      path.join(testConfig.rootDir, "project", "models.json"),
+      JSON.stringify({
+        modelAliases: {
+          reviewer: "local/qwen3:8b",
+        },
+      }),
+      "utf-8",
+    );
+
+    const config = await testConfig.service.load();
+    testConfig.service.validateModelsConfig(config.models);
+    assert.equal(config.models.modelAliases?.["reviewer"], "local/qwen3:8b");
   } finally {
     await rm(testConfig.rootDir, { recursive: true, force: true });
   }

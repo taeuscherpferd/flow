@@ -15,7 +15,7 @@ export const readFileTool: Tool = {
     },
     required: ["path"],
   },
-  async execute(args, ctx) {
+  async execute(args, ctx, signal) {
     const filePath = args["path"];
     if (typeof filePath !== "string" || filePath.trim().length === 0) {
       return { ok: false, content: "Error: 'path' must be a non-empty string." };
@@ -23,7 +23,10 @@ export const readFileTool: Tool = {
 
     const resolved = path.resolve(ctx.cwd, filePath);
     try {
-      const content = await readFile(resolved, "utf-8");
+      const content = await readFile(resolved, {
+        encoding: "utf-8",
+        ...(signal === undefined ? {} : { signal }),
+      });
       return { ok: true, content };
     } catch (err) {
       return { ok: false, content: `Error reading "${filePath}": ${String(err)}` };

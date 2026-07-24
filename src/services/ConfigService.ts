@@ -11,6 +11,7 @@ export interface ModelsConfig {
   defaultProvider: string;
   defaultModel: string;
   providers: Record<string, ProviderConfig>;
+  modelAliases?: Record<string, string>;
 }
 
 export type ConfigScalar = string | number | boolean;
@@ -49,6 +50,7 @@ const DEFAULT_SOUL = "You are a helpful, terse coding assistant.\n";
 const DEFAULT_MODELS_CONFIG: ModelsConfig = {
   defaultProvider: "ollama",
   defaultModel: "llama3.1",
+  modelAliases: {},
   providers: {
     ollama: { baseUrl: "http://localhost:11434", models: [] },
   },
@@ -157,6 +159,26 @@ export class ConfigService {
           `or update defaultModel in ${path.join(this.globalDir, "models.json")}.`,
       );
     }
+
+    for (const [alias, target] of Object.entries(models.modelAliases ?? {})) {
+      if (alias.includes("/") || alias.trim().length === 0) {
+        throw new ConfigError(
+          `Model alias "${alias}" must be a non-empty unqualified name.`,
+        );
+      }
+      const separator = target.indexOf("/");
+      const providerName = target.slice(0, separator);
+      const modelName = target.slice(separator + 1);
+      const targetProvider = models.providers[providerName];
+      if (
+        separator < 1 ||
+        !targetProvider?.models.some((model) => model.name === modelName)
+      ) {
+        throw new ConfigError(
+          `Model alias "${alias}" points to unknown model "${target}".`,
+        );
+      }
+    }
   }
 
   async saveModelSetup(setup: ModelSetup): Promise<string> {
@@ -176,6 +198,7 @@ export class ConfigService {
     const next: ModelsConfig = {
       defaultProvider: setup.provider,
       defaultModel: setup.model,
+      modelAliases: current.modelAliases ?? {},
       providers: {
         ...current.providers,
         [setup.provider]: {
@@ -205,9 +228,11 @@ export class ConfigService {
   }
 
   private async ensureGlobalScaffold(): Promise<void> {
-    if (await pathExists(this.globalDir)) return;
-
+    const globalDirExists = await pathExists(this.globalDir);
     await mkdir(path.join(this.globalDir, "skills"), { recursive: true });
+    await mkdir(path.join(this.globalDir, "workflows"), { recursive: true });
+    if (globalDirExists) return;
+
     await writeFile(
       path.join(this.globalDir, "models.json"),
       JSON.stringify(DEFAULT_MODELS_CONFIG, null, 2),
@@ -217,6 +242,12 @@ export class ConfigService {
     await writeFile(
       path.join(this.globalDir, "config.json"),
       JSON.stringify({ skills: {} }, null, 2),
+      "utf-8",
+    );
+
+    await writeFile(
+      path.join(this.globalDir, "package.json"),
+      JSON.stringify({ private: true, type: "module" }, null, 2),
       "utf-8",
     );
 
@@ -247,6 +278,10 @@ export class ConfigService {
     return {
       defaultProvider: project.defaultProvider ?? global.defaultProvider,
       defaultModel: project.defaultModel ?? global.defaultModel,
+      modelAliases: {
+        ...global.modelAliases,
+        ...project.modelAliases,
+      },
       providers,
     };
   }

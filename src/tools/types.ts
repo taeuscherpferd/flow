@@ -1,11 +1,12 @@
 import type { JSONSchema } from "../providers/types.js";
 import type { SecretsProvider } from "../services/SecretsProvider.js";
+import type { JsonObject } from "../workflows/types.js";
 
 export interface ToolExecutionContext {
   cwd: string;
   requestPermission: (
     toolName: string,
-    args: Record<string, unknown>,
+    args: JsonObject,
   ) => Promise<boolean>;
   secrets: SecretsProvider;
 }
@@ -20,7 +21,8 @@ export interface Tool {
   description: string;
   parameters: JSONSchema;
   execute(
-    args: Record<string, unknown>,
+    args: JsonObject,
     ctx: ToolExecutionContext,
+    signal?: AbortSignal,
   ): Promise<ToolResult>;
 }

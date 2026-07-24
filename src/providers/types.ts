@@ -15,7 +15,7 @@ export interface ToolCall {
   /** Synthesized locally so calls and results can be paired — Ollama's wire format doesn't include one. */
   id: string;
   name: string;
-  arguments: Record<string, unknown>;
+  arguments: JsonObject;
 }
 
 export interface ToolDef {
@@ -46,6 +46,7 @@ export interface ChatCompletionRequest {
   messages: ChatMessage[];
   tools?: ToolDef[];
   options?: { numCtx?: number };
+  signal?: AbortSignal;
 }
 
 export interface ChatCompletionResult {
@@ -56,3 +57,4 @@ export interface ModelProvider {
   readonly id: string;
   chat(request: ChatCompletionRequest): Promise<ChatCompletionResult>;
 }
+import type { JsonObject } from "../workflows/types.js";

@@ -5,7 +5,13 @@
   "license": "ISC",
   "author": "",
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "main": "index.js",
+  "bin": {
+    "flowmation": "./dist/index.js"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
@@ -14,11 +20,11 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
-    "tsx": "^4.23.1",
     "typescript": "^7.0.2"
   },
   "dependencies": {
     "gray-matter": "^4.0.3",
+    "tsx": "^4.23.1",
     "yaml": "^2.9.0"
   }
 }

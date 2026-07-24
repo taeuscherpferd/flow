@@ -42,17 +42,19 @@ export const runCommandTool: Tool = {
     },
     required: ["command"],
   },
-  async execute(args, ctx) {
+  async execute(args, ctx, signal) {
     const command = args["command"];
     if (typeof command !== "string" || command.trim().length === 0) {
       return { ok: false, content: "Error: 'command' must be a non-empty string." };
     }
 
+    signal?.throwIfAborted();
     try {
       const { stdout, stderr } = await execAsync(command, {
         cwd: ctx.cwd,
         timeout: TIMEOUT_MS,
         maxBuffer: 10 * 1024 * 1024,
+        ...(signal === undefined ? {} : { signal }),
       });
       return { ok: true, content: formatOutput(stdout, stderr, 0) };
     } catch (err) {
