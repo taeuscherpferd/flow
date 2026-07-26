@@ -1,6 +1,8 @@
 import { Agent } from "#src/classes/Agent.js";
 import { ConfigService } from "#src/services/ConfigService.js";
+import { InputHistoryStore } from "#src/services/InputHistoryStore.js";
 import { ModelSetupService } from "#src/services/ModelSetupService.js";
+import { InputHistory } from "#src/ui/InputHistory.js";
 import { EOF, ghostPrompt } from "#src/ui/lineEditor.js";
 import { startSpinner } from "#src/ui/spinner.js";
 import { WorkflowRegistry } from "#src/workflows/WorkflowRegistry.js";
@@ -40,7 +42,10 @@ const HELP_TEXT = `Commands:
   /resume <id>     Resume a paused or interrupted workflow run
   /cancel <id>     Cancel a workflow run
   /exit, /quit     Exit the REPL
-  /<skill-name>    Manually load a skill's full instructions into context`;
+  /<skill-name>    Manually load a skill's full instructions into context
+
+Keyboard:
+  Up/Down          Browse input history from this and earlier sessions`;
 
 const READY_TEXT = 'Ready. Type a message, or "/help" for commands.';
 
@@ -52,6 +57,9 @@ export class FlowCli {
   private workflowRegistry: WorkflowRegistry | undefined;
   private workflowController: WorkflowCliController | undefined;
   private stopActiveSpinner: (() => void) | undefined;
+  private inputHistory = new InputHistory();
+  private inputHistoryStore: InputHistoryStore | undefined;
+  private hasWarnedAboutInputHistory = false;
 
   constructor(private readonly configService = new ConfigService()) {}
 
@@ -70,6 +78,7 @@ export class FlowCli {
   private async initialize(): Promise<boolean> {
     try {
       const config = await this.configService.load();
+      await this.initializeInputHistory(config.globalDir);
       this.workflowRegistry = new WorkflowRegistry({
         globalDir: config.globalDir,
         projectDir: config.projectDir,
@@ -97,11 +106,13 @@ export class FlowCli {
       const answer = await ghostPrompt({
         prompt: "> ",
         getCommands: () => this.getCommands(),
+        history: this.inputHistory,
       });
       if (answer === EOF) return;
 
       const line = answer.trim();
       if (line.length === 0) continue;
+      await this.recordInput(line);
       if (await this.handleLine(line)) return;
     }
   }
@@ -114,6 +125,34 @@ export class FlowCli {
       ) ?? []),
       ...(this.agent?.listSkillNames() ?? []),
     ];
+  }
+
+  private async initializeInputHistory(globalDir: string): Promise<void> {
+    this.inputHistoryStore = new InputHistoryStore(globalDir);
+    try {
+      this.inputHistory = new InputHistory(
+        await this.inputHistoryStore.load(),
+      );
+    } catch (error) {
+      this.warnAboutInputHistory("load", String(error));
+    }
+  }
+
+  private async recordInput(line: string): Promise<void> {
+    this.inputHistory.record(line);
+    if (!this.inputHistoryStore) return;
+
+    try {
+      await this.inputHistoryStore.append(line, this.inputHistory.limit);
+    } catch (error) {
+      this.warnAboutInputHistory("save", String(error));
+    }
+  }
+
+  private warnAboutInputHistory(action: string, error: string): void {
+    if (this.hasWarnedAboutInputHistory) return;
+    this.hasWarnedAboutInputHistory = true;
+    console.warn(`Warning: could not ${action} input history: ${error}`);
   }
 
   private async handleLine(line: string): Promise<boolean> {

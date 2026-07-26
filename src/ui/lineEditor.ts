@@ -1,22 +1,29 @@
 import readline from "node:readline";
+import type { InputHistory } from "#src/ui/InputHistory.js";
 
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
 
 export const EOF = Symbol("eof");
 
+export interface GhostPromptInput extends NodeJS.ReadableStream {
+  readonly isTTY: boolean;
+  setRawMode(mode: boolean): void;
+}
+
 export interface GhostPromptOptions {
   prompt: string;
   getCommands: () => string[];
-  input?: NodeJS.ReadStream;
-  output?: NodeJS.WriteStream;
+  history?: InputHistory;
+  input?: GhostPromptInput;
+  output?: NodeJS.WritableStream;
 }
 
 export function ghostPrompt(
   opts: GhostPromptOptions,
 ): Promise<string | typeof EOF> {
-  const input = opts.input ?? process.stdin;
-  const output = opts.output ?? process.stdout;
+  const input: GhostPromptInput = opts.input ?? process.stdin;
+  const output: NodeJS.WritableStream = opts.output ?? process.stdout;
   const { prompt } = opts;
 
   if (!input.isTTY) {
@@ -33,6 +40,7 @@ export function ghostPrompt(
   return new Promise((resolve) => {
     let buffer = "";
     let cursor = 0;
+    const historyNavigator = opts.history?.startNavigation();
 
     function ghost(): string {
       if (cursor !== buffer.length) return "";
@@ -106,6 +114,18 @@ export function ghostPrompt(
           return render();
         case "end":
           cursor = buffer.length;
+          return render();
+        case "up":
+          if (historyNavigator) {
+            buffer = historyNavigator.previous(buffer);
+            cursor = buffer.length;
+          }
+          return render();
+        case "down":
+          if (historyNavigator) {
+            buffer = historyNavigator.next(buffer);
+            cursor = buffer.length;
+          }
           return render();
         case "backspace":
           if (cursor > 0) {

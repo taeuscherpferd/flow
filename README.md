@@ -198,6 +198,12 @@ checkpoint.
 - `/<skill-name>` loads a configured skill.
 - `/exit` or `/quit` exits Flowmation.
 
+Use the Up and Down arrow keys at the main prompt to browse earlier input. The
+most recent 500 entries persist across sessions in
+`~/.work-agent/input-history.json`. If you start typing before browsing,
+returning to the newest position restores that draft. Setup answers and
+workflow approval responses are not included.
+
 Workflows may set `agentInvocation` to `disabled`, `confirm`, or `automatic`.
 Eligible workflow descriptions are given to the main agent through its
 `run_workflow` tool. Confirmed workflows show their proposed input and require
