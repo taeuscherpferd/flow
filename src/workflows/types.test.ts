@@ -1,19 +1,10 @@
+import { ThinkingMode } from "#src/providers/types.js";
+import type { WorkflowAgentRunOptions } from "#src/workflows/types.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {
-  WorkflowAgentRunOptions,
-  WorkflowThinking,
-} from "#src/workflows/types.js";
 
 test("accepts every workflow thinking mode", () => {
-  const thinkingModes = [
-    "default",
-    "off",
-    "on",
-    "low",
-    "medium",
-    "high",
-  ] satisfies WorkflowThinking[];
+  const thinkingModes = Object.values(ThinkingMode);
   const options = thinkingModes.map(
     (thinking): WorkflowAgentRunOptions => ({ thinking }),
   );

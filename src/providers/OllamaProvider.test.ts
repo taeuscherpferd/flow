@@ -1,10 +1,10 @@
+import { OllamaProvider } from "#src/providers/OllamaProvider.js";
+import {
+  ThinkingMode,
+  type ChatCompletionRequest,
+} from "#src/providers/types.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { OllamaProvider } from "#src/providers/OllamaProvider.js";
-import type {
-  ChatCompletionRequest,
-  ThinkingMode,
-} from "#src/providers/types.js";
 
 interface RecordedRequestBody {
   messages: Array<{
@@ -72,15 +72,15 @@ async function recordRequest(
 test("maps thinking modes to Ollama's top-level think field", async () => {
   const cases: Array<{
     mode?: ThinkingMode;
-    expected?: boolean | "low" | "medium" | "high";
+    expected?: boolean | ThinkingMode.Low | ThinkingMode.Medium | ThinkingMode.High;
   }> = [
     {},
-    { mode: "default" },
-    { mode: "off", expected: false },
-    { mode: "on", expected: true },
-    { mode: "low", expected: "low" },
-    { mode: "medium", expected: "medium" },
-    { mode: "high", expected: "high" },
+    { mode: ThinkingMode.Default },
+    { mode: ThinkingMode.Off, expected: false },
+    { mode: ThinkingMode.On, expected: true },
+    { mode: ThinkingMode.Low, expected: ThinkingMode.Low },
+    { mode: ThinkingMode.Medium, expected: ThinkingMode.Medium },
+    { mode: ThinkingMode.High, expected: ThinkingMode.High },
   ];
 
   for (const testCase of cases) {
