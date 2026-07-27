@@ -3,7 +3,8 @@
 Flowmation is a terminal-based coding agent with programmable developer
 workflows. It connects to Ollama-compatible model providers and lets normal
 JavaScript or TypeScript coordinate agents, commands, model escalation,
-bounded parallel work, and human decisions.
+bounded parallel work, human decisions, named specialists, and durable
+workflow schedules.
 
 ## Getting started
 
@@ -33,6 +34,33 @@ Flowmation requires Node.js 24 or newer. On first launch it creates
 
 Configuration is loaded from both `~/.work-agent` and
 `<launch-directory>/.work-agent`, with project values taking precedence.
+
+## Configured agents
+
+Named agents are self-contained packages under
+`~/.work-agent/agents/<name>` or
+`<project>/.work-agent/agents/<name>`. A project package atomically replaces a
+global package with the same name; package directories never merge.
+
+```text
+agents/finance/
+  AGENT.yaml
+  SOUL.md
+  AGENTS.md
+  CONTEXT.md
+  context/
+  skills/
+  workflows/
+```
+
+Use `/agent` to list packages, `/agent finance` to enter a specialist's
+persistent project-scoped conversation, and `/agent main` to return to the
+coordinator. Coordinator delegation uses a fresh isolated specialist session
+and never reads or changes that specialist's direct-chat history.
+
+Specialist resources use canonical IDs such as
+`finance/reconcile-transactions`; their bodies remain lazy-loaded. See
+[docs/agents.md](docs/agents.md) for the package and runtime model.
 
 ## Workflows
 
@@ -182,20 +210,42 @@ Filesystem, network, process, time, randomness, and other direct side effects
 are not cached unless the workflow deliberately wraps their JSON result in a
 checkpoint.
 
+## Scheduling
+
+Schedules run configured workflows, never arbitrary prompts. They capture the
+owning agent, validated input, project working directory, five-field cron
+expression, IANA timezone, and complete package fingerprint. Creation and
+reauthorization are the approval boundaries for unattended execution.
+The detached worker checks that fingerprint before loading workflow code.
+
+The detached worker survives CLI exit, but v1 does not install an OS boot
+service: launch Flowmation once after a reboot. Missed occurrences coalesce
+into one catch-up run, and later occurrences skip while an earlier run remains
+non-terminal.
+
+See [docs/scheduling.md](docs/scheduling.md),
+[docs/security.md](docs/security.md), and
+[docs/migration.md](docs/migration.md).
+
 ## Commands
 
 - `/help` shows command help.
-- `/clear` clears the main conversation context.
-- `/model` lists, configures, or switches models.
-- `/workflows` lists discovered workflows.
-- `/workflow <name> [input]` runs a workflow in the foreground.
+- `/agent [name]` lists agents or switches the active conversation.
+- `/clear` clears only the active conversation.
+- `/model` lists, configures, or switches the active conversation's model.
+- `/workflows` lists workflows owned by the active agent.
+- `/workflow <name> [input]` runs an active-agent workflow in the foreground.
 - `/<workflow-name> [input]` invokes a workflow directly.
 - `/runs` lists recent project runs.
 - `/workflow-debug on|off` toggles live workflow and sub-agent status logging.
 - `/run <id>` inspects a run and presents completed output.
 - `/resume <id>` resumes a waiting, interrupted, or stale running run.
 - `/cancel <id>` cancels a run.
-- `/<skill-name>` loads a configured skill.
+- `/schedules` lists project schedules.
+- `/schedule <id>` inspects a schedule and its occurrences.
+- `/schedule pause|resume|delete|reauthorize <id>` manages a schedule.
+- `/<skill-name>` loads an active-agent skill.
+- `/<agent>/<skill>` loads a specialist skill from main.
 - `/exit` or `/quit` exits Flowmation.
 
 Use the Up and Down arrow keys at the main prompt to browse earlier input. The

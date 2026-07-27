@@ -1,10 +1,11 @@
-import { createHash } from "node:crypto";
-import { access, readdir, readFile, writeFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tsImport } from "tsx/esm/api";
+import { fingerprintDirectory } from "#src/services/DirectoryFingerprint.js";
 import { validateSchema } from "#src/workflows/schema.js";
+import { prepareWorkflowEsmScope as prepareEsmScope } from "#src/workflows/WorkflowEsmScope.js";
 import type {
   AgentInvocationPolicy,
   JsonValue,
@@ -23,12 +24,6 @@ interface WorkflowModule {
   default?: WorkflowDefinition<JsonValue, JsonValue>;
 }
 
-function isJsonObject(
-  value: JsonValue | undefined,
-): value is Record<string, JsonValue> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function registerSdkHook(): void {
   if (sdkHookRegistered) return;
 
@@ -45,109 +40,12 @@ function registerSdkHook(): void {
   sdkHookRegistered = true;
 }
 
-async function collectFiles(directory: string, relative = ""): Promise<string[]> {
-  const current = path.join(directory, relative);
-  const entries = await readdir(current, { withFileTypes: true });
-  const files: string[] = [];
-
-  for (const entry of entries) {
-    const childRelative = path.join(relative, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await collectFiles(directory, childRelative)));
-    } else if (entry.isFile()) {
-      files.push(childRelative);
-    }
-  }
-
-  return files;
-}
-
-async function fingerprintDirectory(directory: string): Promise<string> {
-  const hash = createHash("sha256");
-  const files = (await collectFiles(directory)).sort((left, right) =>
-    left.localeCompare(right),
-  );
-
-  for (const file of files) {
-    hash.update(file.replaceAll(path.sep, "/"));
-    hash.update("\0");
-    hash.update(await readFile(path.join(directory, file)));
-    hash.update("\0");
-  }
-
-  return hash.digest("hex");
-}
-
-async function ensureEsmScope(configDir: string): Promise<void> {
-  const workflowsDir = path.join(configDir, "workflows");
-  try {
-    await access(workflowsDir);
-  } catch {
-    return;
-  }
-
-  const packagePath = path.join(configDir, "package.json");
-  try {
-    await access(packagePath);
-  } catch {
-    await writeFile(
-      packagePath,
-      JSON.stringify({ private: true, type: "module" }, null, 2),
-      "utf-8",
-    );
-  }
-
-  const tsconfigPath = path.join(workflowsDir, "tsconfig.json");
+export async function prepareWorkflowEsmScope(
+  configDir: string,
+): Promise<void> {
   const extension = import.meta.url.endsWith(".ts") ? "ts" : "d.ts";
   const sdkPath = fileURLToPath(new URL(`./sdk.${extension}`, import.meta.url));
-  const relativeSdkPath = path.relative(workflowsDir, sdkPath);
-  const sdkReference = path.isAbsolute(relativeSdkPath)
-    ? sdkPath.replaceAll(path.sep, "/")
-    : relativeSdkPath.replaceAll(path.sep, "/");
-  let tsconfigExists = true;
-  try {
-    await access(tsconfigPath);
-  } catch {
-    tsconfigExists = false;
-  }
-  if (tsconfigExists) {
-    let config: JsonValue;
-    try {
-      config = JSON.parse(await readFile(tsconfigPath, "utf-8")) as JsonValue;
-    } catch {
-      return;
-    }
-    if (!isJsonObject(config)) return;
-    const compilerOptions = config["compilerOptions"];
-    if (!isJsonObject(compilerOptions)) return;
-    const paths = compilerOptions["paths"];
-    if (!isJsonObject(paths) || paths[SDK_SPECIFIER] === undefined) return;
-    paths[SDK_SPECIFIER] = [sdkReference];
-    await writeFile(tsconfigPath, JSON.stringify(config, null, 2), "utf-8");
-    return;
-  }
-
-  await writeFile(
-    tsconfigPath,
-    JSON.stringify(
-      {
-        compilerOptions: {
-          target: "ESNext",
-          module: "NodeNext",
-          moduleResolution: "NodeNext",
-          strict: true,
-          types: ["node"],
-          paths: {
-            [SDK_SPECIFIER]: [sdkReference],
-          },
-        },
-        include: ["./**/*.ts"],
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+  await prepareEsmScope(configDir, sdkPath);
 }
 
 function validateDefinition(
@@ -211,6 +109,17 @@ function validateDefinition(
 export interface WorkflowRegistryDirectories {
   globalDir: string;
   projectDir: string;
+  roots?: Array<{
+    directory: string;
+    source: "global" | "project";
+  }>;
+  agentName?: string;
+  names?: readonly string[];
+  authorizeImport?(record: {
+    name: string;
+    directory: string;
+    fingerprint: string;
+  }): Promise<boolean>;
 }
 
 export class WorkflowRegistry {
@@ -226,16 +135,23 @@ export class WorkflowRegistry {
 
   async load(): Promise<void> {
     this.workflows.clear();
-    await ensureEsmScope(this.directories.globalDir);
-    await ensureEsmScope(this.directories.projectDir);
-    await this.scan(
-      path.join(this.directories.globalDir, "workflows"),
-      "global",
-    );
-    await this.scan(
-      path.join(this.directories.projectDir, "workflows"),
-      "project",
-    );
+    await prepareWorkflowEsmScope(this.directories.globalDir);
+    if (this.directories.projectDir !== this.directories.globalDir) {
+      await prepareWorkflowEsmScope(this.directories.projectDir);
+    }
+    const roots = this.directories.roots ?? [
+      {
+        directory: path.join(this.directories.globalDir, "workflows"),
+        source: "global" as const,
+      },
+      {
+        directory: path.join(this.directories.projectDir, "workflows"),
+        source: "project" as const,
+      },
+    ];
+    for (const root of roots) {
+      await this.scan(root.directory, root.source);
+    }
   }
 
   list(): WorkflowRecord[] {
@@ -301,6 +217,12 @@ export class WorkflowRegistry {
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
+      if (
+        this.directories.names &&
+        !this.directories.names.includes(entry.name)
+      ) {
+        continue;
+      }
       await this.loadDirectory(workflowsDir, entry.name, source);
     }
   }
@@ -346,6 +268,20 @@ export class WorkflowRegistry {
     fingerprint: () => Promise<string>,
   ): Promise<void> {
     try {
+      const sourceFingerprint = await fingerprint();
+      if (
+        this.directories.authorizeImport &&
+        !(await this.directories.authorizeImport({
+          name,
+          directory,
+          fingerprint: sourceFingerprint,
+        }))
+      ) {
+        this.warn(
+          `Skipping workflow "${name}" — its source is not authorized for this execution.`,
+        );
+        return;
+      }
       const module = (await tsImport(
         pathToFileURL(entryPath).href,
         import.meta.url,
@@ -360,8 +296,14 @@ export class WorkflowRegistry {
         definition: module.default!,
         directory,
         entryPath,
-        fingerprint: await fingerprint(),
+        fingerprint: sourceFingerprint,
         source,
+        ...(this.directories.agentName === undefined
+          ? {}
+          : {
+              agentName: this.directories.agentName,
+              resourceId: `${this.directories.agentName}/${name}`,
+            }),
       });
     } catch (error) {
       this.warn(

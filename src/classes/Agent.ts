@@ -1,62 +1,64 @@
-import { randomUUID } from "node:crypto";
-import path from "node:path";
-import { OllamaProvider } from "#src/providers/OllamaProvider.js";
-import type { ChatMessage, ModelProvider } from "#src/providers/types.js";
+import {
+  createProviders,
+  listModelReferences,
+  resolveModel,
+} from "#src/agents/AgentModelRuntime.js";
+import {
+  buildSystemPrompt,
+  type AgentDirectoryListing,
+} from "#src/agents/AgentPrompt.js";
+import {
+  AgentToolName,
+  type AgentExecutionMode,
+  type AgentProfile,
+} from "#src/agents/types.js";
+import { AgentSession } from "#src/classes/AgentSession.js";
+import type {
+  ChatMessage,
+  ModelProvider,
+  ThinkingMode,
+} from "#src/providers/types.js";
 import { AgentComsService } from "#src/services/AgentComsService.js";
-import type { ModelsConfig, ProviderConfig } from "#src/services/ConfigService.js";
+import type { ModelsConfig, ResolvedConfig } from "#src/services/ConfigService.js";
 import { ConfigService } from "#src/services/ConfigService.js";
 import { EnvSecretsProvider } from "#src/services/SecretsProvider.js";
-import type { SkillFrontmatter } from "#src/services/SkillsService.js";
 import { SkillsService } from "#src/services/SkillsService.js";
+import type { SkillLoader } from "#src/tools/loadSkill.js";
 import {
   buildWorkflowSystemContext,
   createRunWorkflowTool,
   type WorkflowToolRuntime,
 } from "#src/tools/runWorkflow.js";
 import { ToolRegistry } from "#src/tools/ToolRegistry.js";
-import type { ToolExecutionContext } from "#src/tools/types.js";
-import type { JsonValue, WorkflowRecord } from "#src/workflows/types.js";
-import { AgentSession } from "#src/classes/AgentSession.js";
+import type {
+  Tool,
+  ToolEffect,
+  ToolExecutionContext,
+} from "#src/tools/types.js";
+import type { JsonObject, JsonValue, WorkflowRecord } from "#src/workflows/types.js";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
 
-function buildSystemPrompt(
-  soul: string,
-  agentsInstructions: string,
-  skills: SkillFrontmatter[],
-): string {
-  const sections = [soul.trim()];
-
-  if (agentsInstructions.trim().length > 0) {
-    sections.push(agentsInstructions.trim());
-  }
-
-  if (skills.length > 0) {
-    const listing = skills.map((s) => `- **${s.name}**: ${s.description}`).join("\n");
-    sections.push(
-      `## Available Skills\n\nCall the "load_skill" tool with a skill's name to load its full instructions when relevant to the current task.\n\n${listing}`,
-    );
-  }
-
-  sections.push(
-    "## Tools\n\nYou have access to read_file, write_file, run_command, and load_skill. Use them when they help complete the user's request.",
-  );
-
-  return sections.join("\n\n---\n\n");
-}
-
-/**
- * Instantiates a provider from its config. All configured backends currently
- * speak the Ollama chat protocol (distinguished only by base URL); add cases
- * here when a genuinely different provider type is introduced.
- */
-function createProvider(_name: string, config: ProviderConfig): ModelProvider {
-  return new OllamaProvider(config.baseUrl);
-}
-
-/** A fully-qualified reference to a model within a specific provider. */
 export interface ModelRef {
   provider: string;
   model: string;
   active: boolean;
+}
+
+export interface CreateProfileAgentOptions {
+  config: ResolvedConfig;
+  profile: AgentProfile;
+  skills: SkillLoader;
+  mode?: AgentExecutionMode;
+  history?: ChatMessage[];
+  modelSpec?: string;
+  agents?: AgentDirectoryListing[];
+  requestPermission?: (
+    toolName: string,
+    args: JsonObject,
+    effect?: ToolEffect,
+  ) => Promise<boolean>;
+  onHistoryChange?(history: ChatMessage[]): void;
 }
 
 export class Agent {
@@ -64,7 +66,8 @@ export class Agent {
   private workflowSystemContext = "";
 
   private constructor(
-    private readonly skillsService: SkillsService,
+    private readonly profile: AgentProfile,
+    private readonly skillsService: SkillLoader,
     private readonly agentComs: AgentComsService,
     private readonly models: ModelsConfig,
     private readonly providers: Map<string, ModelProvider>,
@@ -72,6 +75,7 @@ export class Agent {
     private readonly mainToolRegistry: ToolRegistry,
     private readonly systemPrompt: string,
     private readonly toolCtx: ToolExecutionContext,
+    private readonly executionMode: AgentExecutionMode,
     initialProvider: string,
   ) {
     this.currentProvider = initialProvider;
@@ -82,54 +86,82 @@ export class Agent {
   ): Promise<Agent> {
     const config = await configService.load();
     configService.validateModelsConfig(config.models);
-
-    // Project `.env` is listed first so its values win over the global one;
-    // real shell environment variables win over both 
+    const skills = new SkillsService(
+      config.globalDir,
+      config.projectDir,
+      config.skillsConfig,
+    );
+    await skills.load();
     const secrets = new EnvSecretsProvider([
       path.join(config.projectDir, ".env"),
       path.join(config.globalDir, ".env"),
     ]);
+    skills.validateSecrets(secrets);
+    return Agent.createProfile({
+      config,
+      skills,
+      profile: {
+        name: "main",
+        description: "Coordinates work across the current project",
+        soul: config.soul,
+        instructions: config.agentsInstructions,
+        contextFiles: [],
+        tools: [
+          AgentToolName.ReadFile,
+          AgentToolName.WriteFile,
+          AgentToolName.RunCommand,
+          AgentToolName.LoadSkill,
+          AgentToolName.RunWorkflow,
+        ],
+      },
+    });
+  }
 
-    const skillsService = new SkillsService(config.globalDir, config.projectDir, config.skillsConfig);
-    await skillsService.load();
-    skillsService.validateSecrets(secrets);
+  static createProfile(options: CreateProfileAgentOptions): Agent {
+    const { config, profile, skills } = options;
+    const providers = createProviders(config.models);
+    const requestedModel =
+      options.modelSpec ??
+      profile.model ??
+      `${config.models.defaultProvider}/${config.models.defaultModel}`;
+    const resolved = resolveModel(config.models, requestedModel);
+    if (!resolved.ok) throw new Error(resolved.error);
 
-    const providerConfig = config.models.providers[config.models.defaultProvider];
-    if (!providerConfig) {
-      throw new Error(`No provider config found for "${config.models.defaultProvider}".`);
-    }
-    const modelEntry = providerConfig.models.find((m) => m.name === config.models.defaultModel);
-    if (!modelEntry) {
-      throw new Error(`No model entry found for "${config.models.defaultModel}".`);
-    }
-
-    // Instantiate every configured provider once, so /model can swap between them.
-    const providers = new Map<string, ModelProvider>();
-    for (const [name, cfg] of Object.entries(config.models.providers)) {
-      providers.set(name, createProvider(name, cfg));
-    }
-
-    const baseToolRegistry = new ToolRegistry(skillsService);
-    const mainToolRegistry = new ToolRegistry(skillsService);
-    const systemPrompt = buildSystemPrompt(config.soul, config.agentsInstructions, skillsService.listSkills());
-
+    const secrets = new EnvSecretsProvider([
+      path.join(config.projectDir, ".env"),
+      path.join(config.globalDir, ".env"),
+    ]);
     const toolCtx: ToolExecutionContext = {
-      cwd: process.cwd(),
-      requestPermission: async () => true,
+      cwd: path.dirname(config.projectDir),
+      requestPermission: options.requestPermission ?? (async () => false),
       secrets,
+      executionMode: options.mode ?? "direct",
     };
-
-    const agentComs = new AgentComsService(
-      providers.get(config.models.defaultProvider)!,
-      config.models.defaultModel,
-      modelEntry.contextWindow,
-      mainToolRegistry,
-      systemPrompt,
-      toolCtx,
+    const baseToolRegistry = new ToolRegistry(skills, profile.tools);
+    const mainToolRegistry = new ToolRegistry(skills, profile.tools);
+    const systemPrompt = buildSystemPrompt(
+      profile,
+      skills.listSkills(),
+      options.agents,
     );
-
+    const history = [
+      { role: "system" as const, content: systemPrompt },
+      ...(options.history ?? []).filter((message) => message.role !== "system"),
+    ];
+    const agentComs = new AgentComsService(
+      providers.get(resolved.value.providerName)!,
+      resolved.value.modelName,
+      resolved.value.contextWindow,
+      mainToolRegistry,
+      history,
+      toolCtx,
+      options.onHistoryChange === undefined
+        ? {}
+        : { onHistoryChange: options.onHistoryChange },
+    );
     return new Agent(
-      skillsService,
+      profile,
+      skills,
       agentComs,
       config.models,
       providers,
@@ -137,24 +169,31 @@ export class Agent {
       mainToolRegistry,
       systemPrompt,
       toolCtx,
-      config.models.defaultProvider,
+      options.mode ?? "direct",
+      resolved.value.providerName,
     );
   }
 
-  /** Lists every configured model across all providers, flagging the active one. */
+  getName(): string {
+    return this.profile.name;
+  }
+
+  getThinking(): ThinkingMode | undefined {
+    return this.profile.thinking;
+  }
+
+  getExecutionMode(): AgentExecutionMode {
+    return this.executionMode;
+  }
+
   listModels(): ModelRef[] {
     const activeModel = this.agentComs.getModel();
-    const refs: ModelRef[] = [];
-    for (const [provider, cfg] of Object.entries(this.models.providers)) {
-      for (const m of cfg.models) {
-        refs.push({
-          provider,
-          model: m.name,
-          active: provider === this.currentProvider && m.name === activeModel,
-        });
-      }
-    }
-    return refs;
+    return listModelReferences(this.models).map((reference) => ({
+      ...reference,
+      active:
+        reference.provider === this.currentProvider &&
+        reference.model === activeModel,
+    }));
   }
 
   getCurrentModel(): { provider: string; model: string } {
@@ -164,54 +203,57 @@ export class Agent {
   setModel(
     spec: string,
   ): { ok: true; changed: boolean } | { ok: false; error: string } {
-    const resolved = this.resolveModel(spec);
+    const resolved = resolveModel(this.models, spec);
     if (!resolved.ok) return resolved;
-    const { providerName, modelName, contextWindow } = resolved;
+    const { providerName, modelName, contextWindow } = resolved.value;
     const changed =
       this.currentProvider !== providerName ||
       this.agentComs.getModel() !== modelName;
-    this.agentComs.setModel(this.providers.get(providerName)!, modelName, contextWindow);
+    this.agentComs.setModel(
+      this.providers.get(providerName)!,
+      modelName,
+      contextWindow,
+    );
     this.currentProvider = providerName;
     return { ok: true, changed };
   }
 
   createSession(
-    modelSpec: string,
+    modelSpec?: string,
     history?: ChatMessage[],
     sessionId: string = randomUUID(),
     workflowAccess: "disabled" | "eligible" = "disabled",
   ): AgentSession {
-    const resolved = this.resolveModel(modelSpec);
+    const current = this.getCurrentModel();
+    const resolved = resolveModel(
+      this.models,
+      modelSpec ?? `${current.provider}/${current.model}`,
+    );
     if (!resolved.ok) throw new Error(resolved.error);
-
+    const sessionMode: AgentExecutionMode =
+      this.executionMode === "scheduled" ? "scheduled" : "workflow";
+    const sessionContext: ToolExecutionContext = {
+      ...this.toolCtx,
+      executionMode: sessionMode,
+    };
     const agentComs = new AgentComsService(
-      this.providers.get(resolved.providerName)!,
-      resolved.modelName,
-      resolved.contextWindow,
+      this.providers.get(resolved.value.providerName)!,
+      resolved.value.modelName,
+      resolved.value.contextWindow,
       workflowAccess === "eligible"
         ? this.mainToolRegistry
         : this.baseToolRegistry,
       history ?? this.systemPrompt,
-      this.toolCtx,
+      sessionContext,
     );
-    if (
-      workflowAccess === "eligible" &&
-      this.workflowSystemContext.length > 0 &&
-      !agentComs
-        .snapshotHistory()
-        .some(
-          (message) =>
-            message.role === "system" &&
-            message.content === this.workflowSystemContext,
-        )
-    ) {
+    if (workflowAccess === "eligible" && this.workflowSystemContext.length > 0) {
       agentComs.injectSystemContext(this.workflowSystemContext);
     }
-
     return new AgentSession(
       sessionId,
-      resolved.providerName,
+      resolved.value.providerName,
       agentComs,
+      this.profile.thinking,
     );
   }
 
@@ -234,25 +276,38 @@ export class Agent {
     runtime: WorkflowToolRuntime,
   ): void {
     const context = buildWorkflowSystemContext(workflows);
-    if (context.length === 0) return;
+    const previousContext = this.workflowSystemContext;
     this.workflowSystemContext = context;
     this.mainToolRegistry.register(createRunWorkflowTool(workflows, runtime));
-    this.agentComs.injectSystemContext(context);
+    this.agentComs.replaceSystemContext(previousContext, context);
+  }
+
+  registerDirectTool(tool: Tool): void {
+    this.mainToolRegistry.register(tool);
   }
 
   retargetSession(session: AgentSession, modelSpec: string): void {
-    const resolved = this.resolveModel(modelSpec);
+    const resolved = resolveModel(this.models, modelSpec);
     if (!resolved.ok) throw new Error(resolved.error);
     session.retarget(
-      resolved.providerName,
-      this.providers.get(resolved.providerName)!,
-      resolved.modelName,
-      resolved.contextWindow,
+      resolved.value.providerName,
+      this.providers.get(resolved.value.providerName)!,
+      resolved.value.modelName,
+      resolved.value.contextWindow,
     );
   }
 
-  async handleUserMessage(text: string): Promise<string> {
-    return this.agentComs.handleUserMessage(text);
+  async handleUserMessage(
+    text: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    return this.agentComs.handleUserMessage(
+      text,
+      this.profile.thinking === undefined
+        ? {}
+        : { thinking: this.profile.thinking },
+      signal,
+    );
   }
 
   async presentWorkflowResult(
@@ -260,10 +315,8 @@ export class Agent {
     value: JsonValue,
   ): Promise<string> {
     const current = this.getCurrentModel();
-    const presentationSession = this.createSession(
-      `${current.provider}/${current.model}`,
-    );
-    return presentationSession.run(
+    const session = this.createSession(`${current.provider}/${current.model}`);
+    return session.run(
       `Workflow "${workflowName}" completed with this durable JSON result:\n\n` +
         `${JSON.stringify(value, null, 2)}\n\n` +
         "Present the result clearly to the user. Do not run another workflow.",
@@ -271,7 +324,6 @@ export class Agent {
     );
   }
 
-  /** Loads a skill's full body into context immediately, bypassing the model's own load_skill judgment. Returns false if no such skill exists. */
   loadSkillByName(name: string): boolean {
     const body = this.skillsService.getBody(name);
     if (body === undefined) return false;
@@ -280,10 +332,9 @@ export class Agent {
   }
 
   listSkillNames(): string[] {
-    return this.skillsService.listSkills().map((s) => s.name);
+    return this.skillsService.listSkills().map((skill) => skill.name);
   }
 
-  /** Clears the conversation history back to the initial system prompt. */
   clearHistory(): void {
     this.agentComs.clearHistory(
       this.workflowSystemContext.length === 0
@@ -292,63 +343,11 @@ export class Agent {
     );
   }
 
-  private resolveModel(
-    requestedSpec: string,
-  ):
-    | {
-        ok: true;
-        providerName: string;
-        modelName: string;
-        contextWindow: number;
-      }
-    | { ok: false; error: string } {
-    const aliasTarget = this.models.modelAliases?.[requestedSpec];
-    const spec = aliasTarget ?? requestedSpec;
-    const slash = spec.indexOf("/");
+  snapshotHistory(): ChatMessage[] {
+    return this.agentComs.snapshotHistory();
+  }
 
-    let providerName: string;
-    let modelName: string;
-    if (slash !== -1) {
-      providerName = spec.slice(0, slash).trim();
-      modelName = spec.slice(slash + 1).trim();
-      const config = this.models.providers[providerName];
-      if (!config) {
-        return { ok: false, error: `Unknown provider "${providerName}".` };
-      }
-      if (!config.models.some((model) => model.name === modelName)) {
-        return {
-          ok: false,
-          error: `Provider "${providerName}" has no model "${modelName}".`,
-        };
-      }
-    } else {
-      const matches = this.listModels().filter(
-        (reference) => reference.model === spec,
-      );
-      if (matches.length === 0) {
-        return { ok: false, error: `Unknown model "${requestedSpec}".` };
-      }
-      if (matches.length > 1) {
-        const qualified = matches
-          .map((match) => `${match.provider}/${match.model}`)
-          .join(", ");
-        return {
-          ok: false,
-          error: `Model "${requestedSpec}" exists in multiple providers — qualify it: ${qualified}.`,
-        };
-      }
-      providerName = matches[0]!.provider;
-      modelName = matches[0]!.model;
-    }
-
-    const contextWindow = this.models.providers[
-      providerName
-    ]!.models.find((model) => model.name === modelName)!.contextWindow;
-    return {
-      ok: true,
-      providerName,
-      modelName,
-      contextWindow,
-    };
+  rebuildSystemPrompt(): void {
+    this.agentComs.replaceSystemPrompt(this.systemPrompt);
   }
 }

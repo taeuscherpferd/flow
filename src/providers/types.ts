@@ -1,12 +1,13 @@
 export type ChatRole = "system" | "user" | "assistant" | "tool";
 
-export type ThinkingMode =
-  | "default"
-  | "off"
-  | "on"
-  | "low"
-  | "medium"
-  | "high";
+export enum ThinkingMode {
+  Default = "default",
+  Off = "off",
+  On = "on",
+  Low = "low",
+  Medium = "medium",
+  High = "high",
+}
 
 export interface ChatMessage {
   role: ChatRole;
@@ -39,7 +40,14 @@ export interface JSONSchema {
 }
 
 export interface JSONSchemaProperty {
-  type: "string" | "number" | "boolean" | "object" | "array";
+  type:
+    | "string"
+    | "number"
+    | "boolean"
+    | "object"
+    | "array"
+    | "null"
+    | Array<"string" | "number" | "boolean" | "object" | "array" | "null">;
   description?: string;
   enum?: string[];
   items?: JSONSchemaProperty;

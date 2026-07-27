@@ -4,6 +4,7 @@ import type { Tool } from "#src/tools/types.js";
 
 export const readFileTool: Tool = {
   name: "read_file",
+  effect: "read",
   description: "Read the contents of a text file at the given path.",
   parameters: {
     type: "object",

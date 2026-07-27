@@ -9,6 +9,7 @@ import type {
   WorkflowPresentation,
   WorkflowRunDetails,
   WorkflowRunSummary,
+  WorkflowTrigger,
 } from "#src/workflows/types.js";
 import type { WorkflowAgentRuntime } from "#src/workflows/WorkflowAgentCoordinator.js";
 import {
@@ -23,6 +24,9 @@ export interface StartWorkflowOptions {
   expectedSourceFingerprint?: string;
   signal?: AbortSignal;
   onLog?(message: string, data?: JsonValue): void;
+  agentName?: string;
+  trigger?: WorkflowTrigger;
+  runId?: string;
 }
 
 export type ResumeWorkflowOptions = Omit<
@@ -43,6 +47,7 @@ export class WorkflowEngine {
     private readonly registry: WorkflowRegistry,
     private readonly store: WorkflowRunStore,
     private readonly projectDir = path.resolve(process.cwd()),
+    private readonly agentName = "main",
   ) {}
 
   async start(
@@ -53,7 +58,14 @@ export class WorkflowEngine {
     this.assertAcceptingWork();
     await this.registry.load();
     this.assertAcceptingWork();
-    const run = this.createRun(name, input, options.expectedSourceFingerprint);
+    const run = this.createRun(
+      name,
+      input,
+      options.expectedSourceFingerprint,
+      options.agentName ?? this.agentName,
+      options.trigger ?? { type: "manual" },
+      options.runId,
+    );
     return this.execute(run.id, options);
   }
 
@@ -67,7 +79,8 @@ export class WorkflowEngine {
     if (
       run.status !== "waiting" &&
       run.status !== "interrupted" &&
-      run.status !== "running"
+      run.status !== "running" &&
+      run.status !== "queued"
     ) {
       throw new Error(
         `Workflow run "${runId}" cannot be resumed from status "${run.status}".`,
@@ -84,11 +97,14 @@ export class WorkflowEngine {
 
   getRun(runId: string): WorkflowRunDetails | undefined {
     const run = this.store.getRun(runId);
-    return run?.projectDir === this.projectDir ? run : undefined;
+    return run?.projectDir === this.projectDir &&
+      run.agentName === this.agentName
+      ? run
+      : undefined;
   }
 
   listRuns(): WorkflowRunSummary[] {
-    return this.store.listRuns(this.projectDir);
+    return this.store.listRuns(this.projectDir, 50, this.agentName);
   }
 
   cancel(runId: string): WorkflowRunDetails {
@@ -128,6 +144,9 @@ export class WorkflowEngine {
     name: string,
     input: JsonValue,
     expectedSourceFingerprint?: string,
+    agentName = this.agentName,
+    trigger: WorkflowTrigger = { type: "manual" },
+    runId: string = randomUUID(),
   ): WorkflowRunDetails {
     const record = this.registry.get(name);
     if (!record) throw new Error(`Unknown workflow "${name}".`);
@@ -143,9 +162,11 @@ export class WorkflowEngine {
     assertJsonValue(input, "Workflow input");
 
     return this.store.createRun({
-      id: randomUUID(),
+      id: runId,
       workflowName: name,
       projectDir: this.projectDir,
+      agentName,
+      trigger,
       sourceEntryPath: record.entryPath,
       sourceFingerprint: record.fingerprint,
       presentation: record.definition.presentation ?? "direct",
@@ -265,9 +286,16 @@ export class WorkflowEngine {
 
   private requireProjectRun(runId: string): WorkflowRunDetails {
     const run = this.store.getRun(runId);
-    if (run?.projectDir !== this.projectDir) {
+    if (
+      run?.projectDir !== this.projectDir ||
+      run.agentName !== this.agentName
+    ) {
+      const owner =
+        run?.projectDir === this.projectDir
+          ? ` It belongs to agent "${run.agentName}"; switch with "/agent ${run.agentName}".`
+          : "";
       throw new Error(
-        `No workflow run found with id "${runId}" for this project.`,
+        `No workflow run found with id "${runId}" for agent "${this.agentName}".${owner}`,
       );
     }
     return run;

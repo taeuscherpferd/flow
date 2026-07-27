@@ -8,7 +8,8 @@ export class EnvSecretsProvider implements SecretsProvider {
     for (const file of envFiles) {
       try {
         process.loadEnvFile(file);
-      } catch {
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
         console.warn(`Warning: could not load secrets from ${file}.`);
       }
     }

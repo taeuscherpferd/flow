@@ -4,6 +4,7 @@ import type { Tool } from "#src/tools/types.js";
 
 export const writeFileTool: Tool = {
   name: "write_file",
+  effect: "write",
   description:
     "Write content to a file at the given path, creating parent directories as needed. Overwrites existing files.",
   parameters: {

@@ -31,6 +31,13 @@ export interface SkillRecord {
   expectedConfigVars?: FlowmationSkillMeta | undefined;
   dir: string;
   source: "global" | "project";
+  agentName?: string;
+  resourceId?: string;
+}
+
+export interface SkillScanRoot {
+  directory: string;
+  source: "global" | "project";
 }
 
 function hasRequiredFrontmatterFields(data: Record<string, unknown>): boolean {
@@ -67,9 +74,17 @@ export class SkillsService {
     private readonly globalDir: string,
     private readonly projectDir: string,
     private readonly skillsConfig: SkillsConfig = {},
+    private readonly roots?: SkillScanRoot[],
   ) {}
 
   async load(): Promise<void> {
+    this.skills.clear();
+    if (this.roots) {
+      for (const root of this.roots) {
+        await this.scanInto(root.directory, root.source);
+      }
+      return;
+    }
     await this.scanInto(path.join(this.globalDir, "skills"), "global");
     await this.scanInto(path.join(this.projectDir, "skills"), "project");
   }
@@ -181,6 +196,18 @@ export class SkillsService {
 
   listSkills(): SkillFrontmatter[] {
     return Array.from(this.skills.values(), (s) => s.frontmatter);
+  }
+
+  listRecords(agentName?: string): SkillRecord[] {
+    return Array.from(this.skills.values(), (skill) => ({
+      ...skill,
+      ...(agentName === undefined
+        ? {}
+        : {
+            agentName,
+            resourceId: `${agentName}/${skill.frontmatter.name}`,
+          }),
+    }));
   }
 
   get(name: string): SkillRecord | undefined {

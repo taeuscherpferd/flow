@@ -1,9 +1,18 @@
-import type { SkillsService } from "#src/services/SkillsService.js";
+import type {
+  SkillFrontmatter,
+  SkillsService,
+} from "#src/services/SkillsService.js";
 import type { Tool } from "#src/tools/types.js";
 
-export function createLoadSkillTool(skillsService: SkillsService): Tool {
+export interface SkillLoader {
+  getBody(name: string): string | undefined;
+  listSkills(): SkillFrontmatter[];
+}
+
+export function createLoadSkillTool(skillsService: SkillsService | SkillLoader): Tool {
   return {
     name: "load_skill",
+    effect: "read",
     description:
       "Load the full instructions for a named skill when it's relevant to the current task. Only the name and description of each skill are visible until loaded.",
     parameters: {

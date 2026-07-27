@@ -1,76 +1,51 @@
-import { Agent } from "#src/classes/Agent.js";
-import { ConfigService } from "#src/services/ConfigService.js";
-import { InputHistoryStore } from "#src/services/InputHistoryStore.js";
-import { ModelSetupService } from "#src/services/ModelSetupService.js";
-import { InputHistory } from "#src/ui/InputHistory.js";
-import { EOF, ghostPrompt } from "#src/ui/lineEditor.js";
-import { startSpinner } from "#src/ui/spinner.js";
-import { WorkflowRegistry } from "#src/workflows/WorkflowRegistry.js";
+import { AgentManager } from "#src/agents/AgentManager.js";
+import type { Agent } from "#src/classes/Agent.js";
 import {
   WorkflowCliController,
   type WorkflowCliUi,
 } from "#src/cli/WorkflowCliController.js";
-
-const BUILTIN_COMMANDS = [
-  "help",
-  "clear",
-  "model",
-  "workflows",
-  "workflow",
-  "runs",
-  "workflow-debug",
-  "run",
-  "resume",
-  "cancel",
-  "exit",
-  "quit",
-];
-
-const HELP_TEXT = `Commands:
-  /help            Show this help
-  /clear           Clear the conversation context
-  /model [name]    Set up the first model, list models, or switch to <name>
-  /workflows       List discovered workflows
-  /workflow <name> [input]
-                    Run a workflow
-  /<workflow-name> [input]
-                    Run a workflow by its top-level alias
-  /runs            List recent workflow runs
-  /workflow-debug [on|off]
-                    Show or hide live workflow and agent status messages
-  /run <id>        Inspect a workflow run
-  /resume <id>     Resume a paused or interrupted workflow run
-  /cancel <id>     Cancel a workflow run
-  /exit, /quit     Exit the REPL
-  /<skill-name>    Manually load a skill's full instructions into context
-
-Keyboard:
-  Up/Down          Browse input history from this and earlier sessions`;
-
-const READY_TEXT = 'Ready. Type a message, or "/help" for commands.';
-
-const WELCOME_TEXT =
-  "Welcome to flowmation. Before we can get started you will need to setup a provider and a model. Use /model to get started.";
+import { ScheduleCliController } from "#src/cli/ScheduleCliController.js";
+import { CliPermissionController } from "#src/cli/CliPermissionController.js";
+import { PersistentInputHistory } from "#src/cli/PersistentInputHistory.js";
+import {
+  BUILTIN_COMMANDS,
+  HELP_TEXT,
+  READY_TEXT,
+  WELCOME_TEXT,
+} from "#src/cli/FlowCliHelp.js";
+import { ConfigService } from "#src/services/ConfigService.js";
+import { ModelSetupService } from "#src/services/ModelSetupService.js";
+import { EOF, ghostPrompt } from "#src/ui/lineEditor.js";
+import { startSpinner } from "#src/ui/spinner.js";
+import type { WorkflowRegistry } from "#src/workflows/WorkflowRegistry.js";
 
 export class FlowCli {
+  private manager: AgentManager | undefined;
   private agent: Agent | undefined;
   private workflowRegistry: WorkflowRegistry | undefined;
   private workflowController: WorkflowCliController | undefined;
+  private scheduleController: ScheduleCliController | undefined;
   private stopActiveSpinner: (() => void) | undefined;
-  private inputHistory = new InputHistory();
-  private inputHistoryStore: InputHistoryStore | undefined;
-  private hasWarnedAboutInputHistory = false;
+  private inputHistory: PersistentInputHistory | undefined;
+  private readonly permissionController: CliPermissionController;
 
-  constructor(private readonly configService = new ConfigService()) {}
+  constructor(private readonly configService = new ConfigService()) {
+    this.permissionController = new CliPermissionController({
+      pauseSpinner: () => this.pauseSpinner(),
+      resumeSpinner: () => this.startActiveSpinner(),
+      getScheduleController: () => this.scheduleController,
+    });
+  }
 
   async run(): Promise<void> {
     if (!(await this.initialize())) return;
     console.log(this.agent ? READY_TEXT : WELCOME_TEXT);
-
     try {
       await this.runPromptLoop();
     } finally {
       await this.workflowController?.shutdown();
+      this.scheduleController?.close();
+      this.manager?.close();
       if (process.stdin.isTTY) process.stdin.setRawMode(false);
     }
   }
@@ -78,20 +53,9 @@ export class FlowCli {
   private async initialize(): Promise<boolean> {
     try {
       const config = await this.configService.load();
-      await this.initializeInputHistory(config.globalDir);
-      this.workflowRegistry = new WorkflowRegistry({
-        globalDir: config.globalDir,
-        projectDir: config.projectDir,
-      });
-      await this.workflowRegistry.load();
+      this.inputHistory = await PersistentInputHistory.create(config.globalDir);
       if (this.configService.hasConfiguredDefaultModel(config.models)) {
-        this.agent = await Agent.create(this.configService);
-        this.workflowController = WorkflowCliController.create(
-          this.agent,
-          this.workflowRegistry,
-          config.globalDir,
-          this.workflowUi(),
-        );
+        await this.initializeRuntime();
       }
       return true;
     } catch (error) {
@@ -101,18 +65,46 @@ export class FlowCli {
     }
   }
 
+  private async initializeRuntime(): Promise<void> {
+    this.manager = await AgentManager.create(this.configService, {
+      requestPermission: (toolName, args, effect) =>
+        this.permissionController.request(toolName, args, effect),
+    });
+    this.agent = this.manager.getActiveAgent();
+    this.workflowRegistry = this.manager.getActiveWorkflowRegistry();
+    this.scheduleController = ScheduleCliController.create(this.manager, {
+      confirm: (prompt, details) =>
+        this.permissionController.confirm(prompt, details),
+    });
+    await this.createActiveWorkflowController();
+    this.scheduleController.showUnreadEvents();
+  }
+
+  private async createActiveWorkflowController(): Promise<void> {
+    await this.workflowController?.shutdown();
+    if (!this.manager || !this.agent || !this.workflowRegistry) return;
+    this.workflowController = WorkflowCliController.create(
+      this.agent,
+      this.workflowRegistry,
+      this.manager.globalDir,
+      this.workflowUi(),
+      this.manager.projectDir,
+      this.manager.getActiveName(),
+    );
+  }
+
   private async runPromptLoop(): Promise<void> {
     for (;;) {
+      const identity = this.manager?.getActiveName() ?? "main";
       const answer = await ghostPrompt({
-        prompt: "> ",
+        prompt: `[${identity}] > `,
         getCommands: () => this.getCommands(),
-        history: this.inputHistory,
+        history: this.inputHistory!.history,
       });
       if (answer === EOF) return;
-
       const line = answer.trim();
       if (line.length === 0) continue;
-      await this.recordInput(line);
+      await this.inputHistory?.record(line);
       if (await this.handleLine(line)) return;
     }
   }
@@ -127,34 +119,6 @@ export class FlowCli {
     ];
   }
 
-  private async initializeInputHistory(globalDir: string): Promise<void> {
-    this.inputHistoryStore = new InputHistoryStore(globalDir);
-    try {
-      this.inputHistory = new InputHistory(
-        await this.inputHistoryStore.load(),
-      );
-    } catch (error) {
-      this.warnAboutInputHistory("load", String(error));
-    }
-  }
-
-  private async recordInput(line: string): Promise<void> {
-    this.inputHistory.record(line);
-    if (!this.inputHistoryStore) return;
-
-    try {
-      await this.inputHistoryStore.append(line, this.inputHistory.limit);
-    } catch (error) {
-      this.warnAboutInputHistory("save", String(error));
-    }
-  }
-
-  private warnAboutInputHistory(action: string, error: string): void {
-    if (this.hasWarnedAboutInputHistory) return;
-    this.hasWarnedAboutInputHistory = true;
-    console.warn(`Warning: could not ${action} input history: ${error}`);
-  }
-
   private async handleLine(line: string): Promise<boolean> {
     if (!line.startsWith("/")) {
       await this.respondToUser(line);
@@ -165,12 +129,16 @@ export class FlowCli {
 
   private async handleCommand(command: string): Promise<boolean> {
     if (command === "exit" || command === "quit") return true;
-    if (command === "clear") {
-      this.clearHistory();
-      return false;
-    }
     if (command === "help") {
       this.showHelp();
+      return false;
+    }
+    if (command === "agent" || command.startsWith("agent ")) {
+      await this.handleAgentCommand(command.slice("agent".length).trim());
+      return false;
+    }
+    if (command === "clear") {
+      this.clearHistory();
       return false;
     }
     if (command === "model" || command.startsWith("model ")) {
@@ -218,6 +186,21 @@ export class FlowCli {
       );
       return false;
     }
+    if (command === "schedules") {
+      if (this.scheduleController) this.scheduleController.showSchedules();
+      else console.log(WELCOME_TEXT);
+      return false;
+    }
+    if (command === "schedule" || command.startsWith("schedule ")) {
+      if (this.scheduleController) {
+        await this.scheduleController.handleCommand(
+          command.slice("schedule".length).trim(),
+        );
+      } else {
+        console.log(WELCOME_TEXT);
+      }
+      return false;
+    }
 
     const commandName = command.split(/\s/, 1)[0] ?? "";
     if (this.agent?.listSkillNames().includes(commandName)) {
@@ -232,25 +215,47 @@ export class FlowCli {
       );
       return false;
     }
-
     await this.handleSkillCommand(command);
     return false;
   }
 
+  private async handleAgentCommand(requested: string): Promise<void> {
+    if (!this.manager) {
+      console.log(WELCOME_TEXT);
+      return;
+    }
+    if (requested.length === 0) {
+      for (const agent of this.manager.listAgents()) {
+        console.log(
+          `  ${agent.name}${agent.active ? " (active)" : ""} — ${agent.description} [${agent.source}]`,
+        );
+      }
+      return;
+    }
+    try {
+      this.agent = await this.manager.switchAgent(requested);
+      this.workflowRegistry = this.manager.getActiveWorkflowRegistry();
+      await this.createActiveWorkflowController();
+      console.log(`Switched to agent "${requested}".`);
+    } catch (error) {
+      console.log(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   private clearHistory(): void {
-    const agent = this.getAgentOrShowWelcome();
-    if (!agent) return;
-    agent.clearHistory();
-    console.log("Context cleared.");
+    if (!this.manager) {
+      console.log(WELCOME_TEXT);
+      return;
+    }
+    this.manager.clearActiveHistory();
+    console.log(`Cleared the ${this.manager.getActiveName()} conversation.`);
   }
 
   private showHelp(): void {
     console.log(HELP_TEXT);
     const skills = this.agent?.listSkillNames() ?? [];
     console.log(
-      skills.length > 0
-        ? `Skills: ${skills.join(", ")}`
-        : "No skills loaded.",
+      skills.length > 0 ? `Skills: ${skills.join(", ")}` : "No skills loaded.",
     );
   }
 
@@ -259,16 +264,7 @@ export class FlowCli {
       this.workflowController.showWorkflows();
       return;
     }
-    const workflows = this.workflowRegistry?.list() ?? [];
-    if (workflows.length === 0) {
-      console.log("No workflows discovered.");
-      return;
-    }
-    for (const workflow of workflows) {
-      console.log(
-        `  ${workflow.definition.name} — ${workflow.definition.description}`,
-      );
-    }
+    console.log("No workflows discovered.");
   }
 
   private async handleModelCommand(requested: string): Promise<void> {
@@ -276,64 +272,47 @@ export class FlowCli {
       await this.setupFirstModel();
       return;
     }
-
     const current = this.agent.getCurrentModel();
-    const available = this.agent.listModels();
     if (requested.length === 0) {
       console.log(`Current model: ${current.provider}/${current.model}`);
       console.log("Available:");
-      for (const model of available) {
-        const activeLabel = model.active ? "  (active)" : "";
-        console.log(`  ${model.provider}/${model.model}${activeLabel}`);
+      for (const model of this.agent.listModels()) {
+        console.log(
+          `  ${model.provider}/${model.model}${model.active ? "  (active)" : ""}`,
+        );
       }
-      console.log(
-        'Switch with "/model <name>" or "/model <provider>/<name>".',
-      );
       return;
     }
-
     const result = this.agent.setModel(requested);
     if (!result.ok) {
       console.log(result.error);
       return;
     }
+    this.manager?.persistActive();
     const active = this.agent.getCurrentModel();
-    if (!result.changed) {
-      console.log(`Already using "${active.provider}/${active.model}".`);
-      return;
-    }
-    console.log(`Switched model to "${active.provider}/${active.model}".`);
+    console.log(
+      result.changed
+        ? `Switched model to "${active.provider}/${active.model}".`
+        : `Already using "${active.provider}/${active.model}".`,
+    );
   }
 
   private async setupFirstModel(): Promise<void> {
-    const setupService = new ModelSetupService(
+    const service = new ModelSetupService(
       this.configService,
       (prompt) => ghostPrompt({ prompt, getCommands: () => [] }),
       (message) => console.log(message),
     );
-    const result = await setupService.run();
+    const result = await service.run();
     if (result.status === "cancelled") {
       console.log("Setup cancelled. Use /model when you're ready.");
       return;
     }
-
     console.log(
       `Configured "${result.provider}/${result.model}" in ${result.configPath}.`,
     );
     try {
-      this.agent = await Agent.create(this.configService);
-      const config = await this.configService.load();
-      this.workflowRegistry = new WorkflowRegistry({
-        globalDir: config.globalDir,
-        projectDir: config.projectDir,
-      });
-      await this.workflowRegistry.load();
-      this.workflowController = WorkflowCliController.create(
-        this.agent,
-        this.workflowRegistry,
-        config.globalDir,
-        this.workflowUi(),
-      );
+      await this.initializeRuntime();
       console.log(READY_TEXT);
     } catch (error) {
       console.error(
@@ -348,11 +327,9 @@ export class FlowCli {
     const agent = this.getAgentOrShowWelcome();
     if (!agent) return;
     const firstSpace = command.search(/\s/);
-    const skillName =
-      firstSpace === -1 ? command : command.slice(0, firstSpace);
+    const skillName = firstSpace === -1 ? command : command.slice(0, firstSpace);
     const promptText =
       firstSpace === -1 ? "" : command.slice(firstSpace + 1).trim();
-
     if (!agent.loadSkillByName(skillName)) {
       console.log(`Unknown command or skill: /${skillName}`);
       return;
@@ -364,12 +341,12 @@ export class FlowCli {
   private async respondToUser(text: string): Promise<void> {
     const agent = this.getAgentOrShowWelcome();
     if (!agent) return;
-
     this.startActiveSpinner();
     try {
       console.log(await agent.handleUserMessage(text));
     } finally {
       this.stopSpinner();
+      this.manager?.persistActive();
     }
   }
 

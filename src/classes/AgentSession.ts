@@ -5,8 +5,7 @@ import type {
 } from "#src/providers/types.js";
 import type { AgentComsService } from "#src/services/AgentComsService.js";
 import type {
-  WorkflowAgentRunOptions,
-  WorkflowThinking,
+  WorkflowAgentRunOptions
 } from "#src/workflows/types.js";
 
 export interface AgentSessionModel {
@@ -15,7 +14,7 @@ export interface AgentSessionModel {
 }
 
 function toProviderThinking(
-  thinking: WorkflowThinking | undefined,
+  thinking: ThinkingMode | undefined,
 ): ThinkingMode | undefined {
   return thinking;
 }
@@ -25,6 +24,7 @@ export class AgentSession {
     readonly id: string,
     private providerName: string,
     private readonly agentComs: AgentComsService,
+    private readonly defaultThinking?: ThinkingMode,
   ) {}
 
   getModel(): AgentSessionModel {
@@ -39,7 +39,8 @@ export class AgentSession {
     options: WorkflowAgentRunOptions = {},
     signal?: AbortSignal,
   ): Promise<string> {
-    const thinking = toProviderThinking(options.thinking);
+    const thinking =
+      toProviderThinking(options.thinking) ?? this.defaultThinking;
     return this.agentComs.handleUserMessage(prompt, {
       tools: options.tools ?? "default",
       ...(thinking === undefined ? {} : { thinking }),

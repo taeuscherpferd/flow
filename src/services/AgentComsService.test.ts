@@ -1,15 +1,16 @@
-import assert from "node:assert/strict";
-import test from "node:test";
-import type {
-  ChatCompletionRequest,
-  ChatCompletionResult,
-  ChatMessage,
-  ModelProvider,
+import {
+  ThinkingMode,
+  type ChatCompletionRequest,
+  type ChatCompletionResult,
+  type ChatMessage,
+  type ModelProvider,
 } from "#src/providers/types.js";
+import { AgentComsService } from "#src/services/AgentComsService.js";
+import { SkillsService } from "#src/services/SkillsService.js";
 import { ToolRegistry } from "#src/tools/ToolRegistry.js";
 import type { Tool, ToolExecutionContext } from "#src/tools/types.js";
-import { SkillsService } from "#src/services/SkillsService.js";
-import { AgentComsService } from "#src/services/AgentComsService.js";
+import assert from "node:assert/strict";
+import test from "node:test";
 
 class RecordingProvider implements ModelProvider {
   readonly id = "recording";
@@ -123,14 +124,14 @@ test("applies thinking to every request in a tool loop and retains history", asy
   const service = createService(provider);
 
   const content = await service.handleUserMessage("Use a tool", {
-    thinking: "high",
+    thinking: ThinkingMode.High,
   });
 
   assert.equal(content, "complete");
   assert.equal(requests.length, 2);
   assert.deepEqual(
     requests.map((request) => request.options?.thinking),
-    ["high", "high"],
+    [ThinkingMode.High, ThinkingMode.High],
   );
   assert.equal(requests[1]?.messages[2]?.thinking, "I should use a tool");
   assert.equal(
@@ -278,4 +279,139 @@ test("aborts an active tool and skips remaining tool calls", async () => {
 
   await assert.rejects(execution, /tool aborted/);
   assert.equal(skippedToolCalls, 0);
+});
+
+test("automatically allows reads and denies scheduled effects", async () => {
+  const requests: ChatCompletionRequest[] = [];
+  const calls: ChatMessage[] = [
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        { id: "read", name: "safe-read", arguments: {} },
+        { id: "write", name: "effectful-write", arguments: {} },
+        {
+          id: "workflow",
+          name: "policy-managed-workflow",
+          arguments: {},
+        },
+      ],
+    },
+    { role: "assistant", content: "done" },
+  ];
+  const provider: ModelProvider = {
+    id: "permissions",
+    async chat(request) {
+      requests.push(structuredClone(request));
+      return { message: calls.shift()! };
+    },
+  };
+  const tools = new ToolRegistry(new SkillsService("global", "project"));
+  let reads = 0;
+  let writes = 0;
+  let workflows = 0;
+  tools.register({
+    name: "safe-read",
+    effect: "read",
+    description: "Reads",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      reads += 1;
+      return { ok: true, content: "read" };
+    },
+  });
+  tools.register({
+    name: "effectful-write",
+    effect: "write",
+    description: "Writes",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      writes += 1;
+      return { ok: true, content: "write" };
+    },
+  });
+  tools.register({
+    name: "policy-managed-workflow",
+    effect: "external",
+    permissionMode: "self-managed",
+    description: "Uses its own authorization policy",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      workflows += 1;
+      return { ok: true, content: "workflow" };
+    },
+  });
+  const service = new AgentComsService(
+    provider,
+    "test",
+    8192,
+    tools,
+    "system",
+    {
+      cwd: process.cwd(),
+      requestPermission: async () => true,
+      secrets: { get: () => undefined, has: () => false },
+      executionMode: "scheduled",
+    },
+  );
+
+  await service.handleUserMessage("run");
+
+  assert.equal(reads, 1);
+  assert.equal(writes, 0);
+  assert.equal(workflows, 0);
+  assert.match(requests[1]?.messages.at(-1)?.content ?? "", /Permission denied/);
+});
+
+test("lets self-managed tools authorize themselves outside scheduled runs", async () => {
+  const calls: ChatMessage[] = [
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        { id: "workflow", name: "policy-managed-workflow", arguments: {} },
+      ],
+    },
+    { role: "assistant", content: "done" },
+  ];
+  const provider: ModelProvider = {
+    id: "self-managed-permission",
+    async chat() {
+      return { message: calls.shift()! };
+    },
+  };
+  const tools = new ToolRegistry(new SkillsService("global", "project"));
+  let executions = 0;
+  tools.register({
+    name: "policy-managed-workflow",
+    effect: "external",
+    permissionMode: "self-managed",
+    description: "Uses its own authorization policy",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      executions += 1;
+      return { ok: true, content: "workflow result" };
+    },
+  });
+  let permissionRequests = 0;
+  const service = new AgentComsService(
+    provider,
+    "test",
+    8192,
+    tools,
+    "system",
+    {
+      cwd: process.cwd(),
+      requestPermission: async () => {
+        permissionRequests += 1;
+        return false;
+      },
+      secrets: { get: () => undefined, has: () => false },
+      executionMode: "direct",
+    },
+  );
+
+  assert.equal(await service.handleUserMessage("run"), "done");
+  assert.equal(executions, 1);
+  assert.equal(permissionRequests, 0);
 });

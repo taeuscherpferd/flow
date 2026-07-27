@@ -47,10 +47,18 @@ export class WorkflowCliController {
     registry: WorkflowRegistry,
     globalDir: string,
     ui: WorkflowCliUi,
+    projectDir: string = process.cwd(),
+    agentName = "main",
   ): WorkflowCliController {
     const store = new WorkflowRunStore(globalDir);
     try {
-      const engine = new WorkflowEngine(agent, registry, store);
+      const engine = new WorkflowEngine(
+        agent,
+        registry,
+        store,
+        projectDir,
+        agentName,
+      );
       return new WorkflowCliController(agent, registry, store, engine, ui);
     } catch (error) {
       store.close();
@@ -121,7 +129,8 @@ export class WorkflowCliController {
     }
     for (const run of runs) {
       console.log(
-        `${run.id}  ${run.status.padEnd(16)}  ${run.workflowName}  ${run.updatedAt}`,
+        `${run.id}  ${run.status.padEnd(16)}  ` +
+          `${run.agentName}/${run.workflowName}  ${run.updatedAt}`,
       );
     }
   }

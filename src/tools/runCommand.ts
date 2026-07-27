@@ -33,6 +33,7 @@ function formatOutput(stdout: string, stderr: string, exitCode: number | null): 
 
 export const runCommandTool: Tool = {
   name: "run_command",
+  effect: "command",
   description:
     "Execute a shell command and return its stdout, stderr, and exit code. Times out after 30 seconds; output is capped at 500KB.",
   parameters: {

@@ -1,4 +1,5 @@
 import type { ModelRef } from "#src/classes/Agent.js";
+import type { ThinkingMode } from "#src/providers/types.js";
 
 export type JsonPrimitive = string | number | boolean | null;
 
@@ -93,6 +94,8 @@ export interface WorkflowRecord {
   entryPath: string;
   fingerprint: string;
   source: "global" | "project";
+  agentName?: string;
+  resourceId?: string;
 }
 
 export interface WorkflowOutputApi {
@@ -104,17 +107,9 @@ export interface WorkflowOutputApi {
   ): WorkflowOutputValue<TValue>;
 }
 
-export type WorkflowThinking =
-  | "default"
-  | "off"
-  | "on"
-  | "low"
-  | "medium"
-  | "high";
-
 export interface WorkflowAgentRunOptions {
   tools?: "default" | "none";
-  thinking?: WorkflowThinking;
+  thinking?: ThinkingMode;
 }
 
 export interface WorkflowAgentResponse {
@@ -132,7 +127,7 @@ export interface WorkflowAgentSession {
 }
 
 export interface WorkflowAgentCreateOptions {
-  model: string;
+  model?: string;
 }
 
 export interface WorkflowAgentForkOptions {
@@ -177,7 +172,7 @@ export interface ElevationOptions<
   TFallback extends JsonValue = TValue,
 > {
   model: string;
-  thinking?: WorkflowThinking;
+  thinking?: ThinkingMode;
   attempts: number;
   context: ElevationContext;
   operation(attempt: ElevationAttempt<TValue>): Promise<TValue>;
@@ -280,12 +275,18 @@ export interface WorkflowRunSummary {
   id: string;
   workflowName: string;
   projectDir: string;
+  agentName: string;
+  trigger: WorkflowTrigger;
   status: WorkflowRunStatus;
   presentation: WorkflowPresentation;
   createdAt: string;
   updatedAt: string;
   error?: string;
 }
+
+export type WorkflowTrigger =
+  | { type: "manual" }
+  | { type: "schedule"; scheduleId: string; scheduledFor: string };
 
 export interface WorkflowRunDetails extends WorkflowRunSummary {
   input: JsonValue;

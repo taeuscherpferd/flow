@@ -45,7 +45,7 @@ export interface WorkflowAgentSessionRuntime {
 
 export interface WorkflowAgentRuntime {
   createSession(
-    modelSpec: string,
+    modelSpec?: string,
     history?: ChatMessage[],
     sessionId?: string,
   ): WorkflowAgentSessionRuntime;

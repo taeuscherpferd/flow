@@ -39,6 +39,8 @@ export function createRunWorkflowTool(
 
   return {
     name: "run_workflow",
+    effect: "external",
+    permissionMode: "self-managed",
     description:
       "Run an eligible developer workflow when it directly matches the user's request. " +
       "Use inputText for string workflows and input for schema-based object workflows.",

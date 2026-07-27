@@ -3,16 +3,21 @@ import path from "node:path";
 import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 import type {
   JsonValue,
+  WorkflowTrigger,
   WorkflowPresentation,
   WorkflowRunDetails,
   WorkflowRunStatus,
   WorkflowRunSummary,
 } from "#src/workflows/types.js";
+import { ensureScheduleRunTriggers } from "#src/scheduling/ScheduleDatabaseSchema.js";
+import { configureSqliteDatabase } from "#src/services/SqliteDatabase.js";
 
 interface StoredRunRow {
   id: string;
   workflow_name: string;
   project_dir: string;
+  agent_name: string;
+  trigger_json: string;
   source_entry_path: string;
   source_fingerprint: string;
   status: WorkflowRunStatus;
@@ -36,6 +41,8 @@ export interface CreateWorkflowRun {
   id: string;
   workflowName: string;
   projectDir: string;
+  agentName?: string;
+  trigger?: WorkflowTrigger;
   sourceEntryPath: string;
   sourceFingerprint: string;
   presentation: WorkflowPresentation;
@@ -58,6 +65,8 @@ function mapSummary(row: StoredRunRow): WorkflowRunSummary {
     id: row.id,
     workflowName: row.workflow_name,
     projectDir: row.project_dir,
+    agentName: row.agent_name,
+    trigger: JSON.parse(row.trigger_json) as WorkflowTrigger,
     status: row.status,
     presentation: row.presentation,
     createdAt: row.created_at,
@@ -95,6 +104,8 @@ function mapStoredRow(row: Record<string, SQLOutputValue>): StoredRunRow {
     id: requiredString(row, "id"),
     workflow_name: requiredString(row, "workflow_name"),
     project_dir: requiredString(row, "project_dir"),
+    agent_name: requiredString(row, "agent_name"),
+    trigger_json: requiredString(row, "trigger_json"),
     source_entry_path: requiredString(row, "source_entry_path"),
     source_fingerprint: requiredString(row, "source_fingerprint"),
     status: requiredString(row, "status") as WorkflowRunStatus,
@@ -128,14 +139,14 @@ export class WorkflowRunStore {
   constructor(globalDir: string) {
     mkdirSync(globalDir, { recursive: true });
     this.database = new DatabaseSync(path.join(globalDir, "runs.sqlite"));
+    configureSqliteDatabase(this.database);
     this.database.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA foreign_keys = ON;
-
       CREATE TABLE IF NOT EXISTS workflow_runs (
         id TEXT PRIMARY KEY,
         workflow_name TEXT NOT NULL,
         project_dir TEXT NOT NULL,
+        agent_name TEXT NOT NULL DEFAULT 'main',
+        trigger_json TEXT NOT NULL DEFAULT '{"type":"manual"}',
         source_entry_path TEXT NOT NULL,
         source_fingerprint TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -166,6 +177,17 @@ export class WorkflowRunStore {
         FOREIGN KEY(run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE
       );
     `);
+    this.ensureColumn(
+      "workflow_runs",
+      "agent_name",
+      "TEXT NOT NULL DEFAULT 'main'",
+    );
+    ensureScheduleRunTriggers(this.database);
+    this.ensureColumn(
+      "workflow_runs",
+      "trigger_json",
+      `TEXT NOT NULL DEFAULT '{"type":"manual"}'`,
+    );
   }
 
   createRun(input: CreateWorkflowRun): WorkflowRunDetails {
@@ -173,15 +195,17 @@ export class WorkflowRunStore {
     this.database
       .prepare(
         `INSERT INTO workflow_runs (
-          id, workflow_name, project_dir, source_entry_path,
+          id, workflow_name, project_dir, agent_name, trigger_json, source_entry_path,
           source_fingerprint, status, presentation, input_json,
           parent_run_id, depth, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.id,
         input.workflowName,
         input.projectDir,
+        input.agentName ?? "main",
+        JSON.stringify(input.trigger ?? { type: "manual" }),
         input.sourceEntryPath,
         input.sourceFingerprint,
         input.presentation,
@@ -201,15 +225,29 @@ export class WorkflowRunStore {
     return row ? mapDetails(mapStoredRow(row)) : undefined;
   }
 
-  listRuns(projectDir: string, limit = 50): WorkflowRunSummary[] {
-    const rows = this.database
-      .prepare(
-        `SELECT * FROM workflow_runs
-         WHERE project_dir = ?
-         ORDER BY updated_at DESC
-         LIMIT ?`,
-      )
-      .all(projectDir, limit);
+  listRuns(
+    projectDir: string,
+    limit = 50,
+    agentName?: string,
+  ): WorkflowRunSummary[] {
+    const rows =
+      agentName === undefined
+        ? this.database
+            .prepare(
+              `SELECT * FROM workflow_runs
+               WHERE project_dir = ?
+               ORDER BY updated_at DESC
+               LIMIT ?`,
+            )
+            .all(projectDir, limit)
+        : this.database
+            .prepare(
+              `SELECT * FROM workflow_runs
+               WHERE project_dir = ? AND agent_name = ?
+               ORDER BY updated_at DESC
+               LIMIT ?`,
+            )
+            .all(projectDir, agentName, limit);
     return rows.map((row) => mapSummary(mapStoredRow(row)));
   }
 
@@ -341,5 +379,13 @@ export class WorkflowRunStore {
 
   close(): void {
     this.database.close();
+  }
+
+  private ensureColumn(table: string, column: string, definition: string): void {
+    const columns = this.database
+      .prepare(`PRAGMA table_info(${table})`)
+      .all();
+    if (columns.some((entry) => entry["name"] === column)) return;
+    this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
