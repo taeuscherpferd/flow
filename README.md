@@ -254,6 +254,10 @@ most recent 500 entries persist across sessions in
 returning to the newest position restores that draft. Setup answers and
 workflow approval responses are not included.
 
+Ctrl+C stops an active model response first, then a foreground workflow. At the
+prompt, it clears any entered text. Press Ctrl+C twice on an empty prompt to
+exit.
+
 Workflows may set `agentInvocation` to `disabled`, `confirm`, or `automatic`.
 Eligible workflow descriptions are given to the main agent through its
 `run_workflow` tool. Confirmed workflows show their proposed input and require

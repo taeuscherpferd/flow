@@ -31,6 +31,7 @@ export function buildWorkflowConfirmationDetails(
 
 export class WorkflowCliController {
   private debugLogging = false;
+  private foregroundController: AbortController | undefined;
 
   private constructor(
     private readonly agent: Agent,
@@ -109,15 +110,41 @@ export class WorkflowCliController {
     record: WorkflowRecord,
     rawInput: string,
   ): Promise<void> {
-    try {
+    await this.runInForeground(async (signal) => {
       const input = this.registry.parseInput(record, rawInput);
       const result = await this.engine.start(record.definition.name, input, {
         humanAdapter: this.createHumanAdapter(),
         onLog: (message, data) => this.printWorkflowLog(message, data),
+        signal,
       });
-      await this.displayResult(result);
+      await this.displayResult(result, signal);
+    });
+  }
+
+  cancelForeground(): boolean {
+    if (!this.foregroundController) return false;
+    this.foregroundController.abort(
+      new Error("The foreground workflow was cancelled."),
+    );
+    this.ui.stopSpinner();
+    return true;
+  }
+
+  private async runInForeground(
+    execution: (signal: AbortSignal) => Promise<void>,
+  ): Promise<void> {
+    const controller = new AbortController();
+    this.foregroundController = controller;
+    try {
+      await execution(controller.signal);
     } catch (error) {
-      console.log(error instanceof Error ? error.message : String(error));
+      if (!controller.signal.aborted) {
+        console.log(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (this.foregroundController === controller) {
+        this.foregroundController = undefined;
+      }
     }
   }
 
@@ -167,15 +194,14 @@ export class WorkflowCliController {
       console.log("Usage: /resume <id>");
       return;
     }
-    try {
+    await this.runInForeground(async (signal) => {
       const result = await this.engine.resume(runId, {
         humanAdapter: this.createHumanAdapter(),
         onLog: (message, data) => this.printWorkflowLog(message, data),
+        signal,
       });
-      await this.displayResult(result);
-    } catch (error) {
-      console.log(error instanceof Error ? error.message : String(error));
-    }
+      await this.displayResult(result, signal);
+    });
   }
 
   cancelRun(runId: string): void {
@@ -229,6 +255,7 @@ export class WorkflowCliController {
 
   private async displayResult(
     result: WorkflowInvocationResult,
+    signal?: AbortSignal,
   ): Promise<void> {
     if (result.run.status !== "completed" || result.value === undefined) {
       const detail = result.run.error ? `: ${result.run.error}` : "";
@@ -250,6 +277,7 @@ export class WorkflowCliController {
           await this.agent.presentWorkflowResult(
             result.run.workflowName,
             result.value,
+            signal,
           ),
         );
       } finally {
@@ -279,6 +307,7 @@ export class WorkflowCliController {
         const answer = await ghostPrompt({
           prompt: `${prompt.prompt} [y/N] `,
           getCommands: () => [],
+          onInterrupt: () => this.cancelForeground(),
         });
         if (answer === EOF) return false;
         return ["y", "yes"].includes(answer.trim().toLowerCase());
@@ -291,6 +320,7 @@ export class WorkflowCliController {
       const answer = await ghostPrompt({
         prompt: `${prompt.prompt} `,
         getCommands: () => [],
+        onInterrupt: () => this.cancelForeground(),
       });
       if (answer === EOF) throw new Error("Human input was cancelled.");
       return answer;
@@ -312,6 +342,7 @@ export class WorkflowCliController {
       const answer = await ghostPrompt({
         prompt: `${prompt.prompt} `,
         getCommands: () => [],
+        onInterrupt: () => this.cancelForeground(),
       });
       if (answer === EOF) throw new Error("Human input was cancelled.");
       const trimmed = answer.trim();

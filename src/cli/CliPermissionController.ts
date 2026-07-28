@@ -6,6 +6,7 @@ import type { JsonObject } from "#src/workflows/types.js";
 export interface CliPermissionUi {
   pauseSpinner(): boolean;
   resumeSpinner(): void;
+  interruptForeground?(): boolean;
   getScheduleController(): ScheduleCliController | undefined;
 }
 
@@ -22,6 +23,7 @@ export class CliPermissionController {
       ghostPrompt({
         prompt,
         getCommands: () => [],
+        onInterrupt: () => this.ui.interruptForeground?.() ?? false,
       }),
   ) {}
 

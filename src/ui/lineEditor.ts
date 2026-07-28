@@ -21,6 +21,7 @@ export interface GhostPromptOptions {
   history?: InputHistory;
   input?: GhostPromptInput;
   output?: GhostPromptOutput;
+  onInterrupt?(): boolean;
 }
 
 export function ghostPrompt(
@@ -45,7 +46,8 @@ export function ghostPrompt(
     let buffer = "";
     let cursor = 0;
     let renderedCursorRow = 0;
-    const historyNavigator = opts.history?.startNavigation();
+    let exitArmed = false;
+    let historyNavigator = opts.history?.startNavigation();
 
     function ghost(): string {
       if (cursor !== buffer.length) return "";
@@ -106,10 +108,21 @@ export function ghostPrompt(
 
     function onKey(str: string | undefined, key: readline.Key): void {
       if (key.ctrl && key.name === "c") {
-        cleanup();
-        output.write("\n");
-        process.exit(130);
+        if (opts.onInterrupt?.()) return finish(EOF);
+        if (buffer.length > 0) {
+          buffer = "";
+          cursor = 0;
+          exitArmed = false;
+          historyNavigator = opts.history?.startNavigation();
+          return render();
+        }
+        if (exitArmed) return finish(EOF);
+        exitArmed = true;
+        output.write("\nPress ctrl + c again to exit.\n");
+        renderedCursorRow = 0;
+        return render();
       }
+      exitArmed = false;
       if (key.ctrl && key.name === "d") {
         if (buffer.length === 0) return finish(EOF);
         return;

@@ -26,6 +26,7 @@ export class FlowCli {
   private workflowController: WorkflowCliController | undefined;
   private scheduleController: ScheduleCliController | undefined;
   private stopActiveSpinner: (() => void) | undefined;
+  private activeModelController: AbortController | undefined;
   private inputHistory: PersistentInputHistory | undefined;
   private readonly permissionController: CliPermissionController;
 
@@ -33,6 +34,7 @@ export class FlowCli {
     this.permissionController = new CliPermissionController({
       pauseSpinner: () => this.pauseSpinner(),
       resumeSpinner: () => this.startActiveSpinner(),
+      interruptForeground: () => this.interruptForeground(),
       getScheduleController: () => this.scheduleController,
     });
   }
@@ -40,9 +42,11 @@ export class FlowCli {
   async run(): Promise<void> {
     if (!(await this.initialize())) return;
     console.log(this.agent ? READY_TEXT : WELCOME_TEXT);
+    process.on("SIGINT", this.handleSigint);
     try {
       await this.runPromptLoop();
     } finally {
+      process.removeListener("SIGINT", this.handleSigint);
       await this.workflowController?.shutdown();
       this.scheduleController?.close();
       this.manager?.close();
@@ -341,13 +345,34 @@ export class FlowCli {
   private async respondToUser(text: string): Promise<void> {
     const agent = this.getAgentOrShowWelcome();
     if (!agent) return;
+    const controller = new AbortController();
+    this.activeModelController = controller;
     this.startActiveSpinner();
     try {
-      console.log(await agent.handleUserMessage(text));
+      console.log(await agent.handleUserMessage(text, controller.signal));
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
     } finally {
+      if (this.activeModelController === controller) {
+        this.activeModelController = undefined;
+      }
       this.stopSpinner();
       this.manager?.persistActive();
     }
+  }
+
+  private readonly handleSigint = (): void => {
+    this.interruptForeground();
+  };
+
+  private interruptForeground(): boolean {
+    if (this.activeModelController) {
+      this.activeModelController.abort(new Error("The model was stopped."));
+      this.stopSpinner();
+      return true;
+    }
+    if (this.workflowController?.cancelForeground()) return true;
+    return false;
   }
 
   private workflowUi(): WorkflowCliUi {

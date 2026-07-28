@@ -313,6 +313,7 @@ export class Agent {
   async presentWorkflowResult(
     workflowName: string,
     value: JsonValue,
+    signal?: AbortSignal,
   ): Promise<string> {
     const current = this.getCurrentModel();
     const session = this.createSession(`${current.provider}/${current.model}`);
@@ -321,6 +322,7 @@ export class Agent {
         `${JSON.stringify(value, null, 2)}\n\n` +
         "Present the result clearly to the user. Do not run another workflow.",
       { tools: "none" },
+      signal,
     );
   }
 
