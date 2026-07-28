@@ -11,19 +11,23 @@ export interface GhostPromptInput extends NodeJS.ReadableStream {
   setRawMode(mode: boolean): void;
 }
 
+export interface GhostPromptOutput extends NodeJS.WritableStream {
+  readonly columns?: number;
+}
+
 export interface GhostPromptOptions {
   prompt: string;
   getCommands: () => string[];
   history?: InputHistory;
   input?: GhostPromptInput;
-  output?: NodeJS.WritableStream;
+  output?: GhostPromptOutput;
 }
 
 export function ghostPrompt(
   opts: GhostPromptOptions,
 ): Promise<string | typeof EOF> {
   const input: GhostPromptInput = opts.input ?? process.stdin;
-  const output: NodeJS.WritableStream = opts.output ?? process.stdout;
+  const output: GhostPromptOutput = opts.output ?? process.stdout;
   const { prompt } = opts;
 
   if (!input.isTTY) {
@@ -40,6 +44,7 @@ export function ghostPrompt(
   return new Promise((resolve) => {
     let buffer = "";
     let cursor = 0;
+    let renderedCursorRow = 0;
     const historyNavigator = opts.history?.startNavigation();
 
     function ghost(): string {
@@ -56,12 +61,27 @@ export function ghostPrompt(
 
     function render(): void {
       const g = ghost();
-      output.write("\r\x1b[K");
+      const columns = Math.max(output.columns ?? 80, 1);
+      const endOffset = prompt.length + buffer.length + g.length;
+      const targetOffset = prompt.length + cursor;
+      const endRow = Math.floor(endOffset / columns);
+      const endColumn = endOffset % columns;
+      const targetRow = Math.floor(targetOffset / columns);
+      const targetColumn = targetOffset % columns;
+
+      readline.cursorTo(output, 0);
+      if (renderedCursorRow > 0) {
+        readline.moveCursor(output, 0, -renderedCursorRow);
+      }
+      readline.clearScreenDown(output);
       output.write(prompt + buffer);
       if (g) output.write(DIM + g + RESET);
-      const end = prompt.length + buffer.length + g.length;
-      const target = prompt.length + cursor;
-      if (end > target) output.write(`\x1b[${end - target}D`);
+      if (endOffset > 0 && endColumn === 0) output.write(" ");
+      readline.cursorTo(output, targetColumn);
+      if (targetRow !== endRow) {
+        readline.moveCursor(output, 0, targetRow - endRow);
+      }
+      renderedCursorRow = targetRow;
     }
 
     function acceptGhost(): boolean {
