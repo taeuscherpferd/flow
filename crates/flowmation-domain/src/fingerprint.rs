@@ -201,7 +201,9 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{FingerprintError, fingerprint_directory, list_regular_files};
+    #[cfg(unix)]
+    use super::FingerprintError;
+    use super::{fingerprint_directory, list_regular_files};
 
     #[test]
     fn hashes_relative_paths_and_contents_in_deterministic_order()

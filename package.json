@@ -10,8 +10,8 @@
     "build": "cargo build --workspace && pnpm --dir workflow-host run build",
     "build:rust": "cargo build --workspace",
     "build:workflow-host": "pnpm --dir workflow-host run build",
-    "test": "cargo test --workspace --all-features && pnpm --dir workflow-host test",
-    "test:rust": "cargo test --workspace --all-features",
+    "test": "pnpm run test:rust && pnpm --dir workflow-host test",
+    "test:rust": "pnpm --dir workflow-host run build && cargo test --workspace --all-features",
     "test:workflow-host": "pnpm --dir workflow-host test",
     "lint": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
     "format": "cargo fmt --all -- --check"

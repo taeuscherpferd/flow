@@ -9,7 +9,8 @@ including their Node API and workflow-local dependency access.
 ## Requirements
 
 - Rust 1.96 or newer
-- Node.js 24 or newer and pnpm for the workflow compatibility host
+- Node.js 24 or newer and pnpm for the workflow compatibility host. The
+  `node` executable must be available on `PATH`.
 - An Ollama-compatible provider
 
 The current CLI initializes workflow discovery before its first normal agent
@@ -40,11 +41,19 @@ Run the Rust and workflow-host suites:
 pnpm test
 ```
 
-Or run them independently:
+The Rust test script builds the ignored workflow-host distribution first, so it
+also works from a clean checkout. Run the suites independently with:
 
 ```sh
-cargo test --workspace --all-features
+pnpm run test:rust
 pnpm --dir workflow-host test
+```
+
+When invoking Cargo directly, build the workflow host first:
+
+```sh
+pnpm --dir workflow-host run build
+cargo test --workspace --all-features
 ```
 
 Formatting and lint checks are:
@@ -75,7 +84,8 @@ FLOWMATION_WORKFLOW_HOST=/absolute/path/to/workflow-host/dist/index.js flowmatio
 
 Without that variable, a binary built in this checkout uses
 `workflow-host/dist/index.js` relative to the crate source path embedded at
-compile time.
+compile time. Host paths are simplified before being passed to Node so Windows
+verbatim paths remain compatible with the Node module loader.
 
 ## Workspace architecture
 
@@ -200,11 +210,12 @@ replays waiting or interrupted runs with checkpoint, effect, and human-step
 durability. `/cancel` changes the durable status, but it cannot signal an
 execution owned by a different process.
 
-Normal text is sent to the active agent. On a TTY the Rust line editor supports
-cursor movement, deletion, persistent history navigation, wrapped-row redraw,
-dimmed slash-command completion, and the two-stage Ctrl+C behavior. Press Tab
-or Right Arrow at the end of the input to accept the suggested built-in,
-workflow, or skill command. Non-TTY stdin uses line-oriented input.
+Normal text is sent to the active agent. On a TTY the cross-platform Rust line
+editor uses Crossterm on Linux, macOS, and Windows. It supports cursor movement,
+deletion, persistent history navigation, wrapped-row redraw, dimmed
+slash-command completion, and the two-stage Ctrl+C behavior. Press Tab or Right
+Arrow at the end of the input to accept the suggested built-in, workflow, or
+skill command. Non-TTY stdin uses line-oriented input.
 
 Schedule creation and reauthorization exist as application services but are
 not registered as CLI/model tools. The CLI can manage records already present

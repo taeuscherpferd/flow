@@ -1,7 +1,8 @@
 import { lstat, readFile, writeFile } from "node:fs/promises";
-import { registerHooks } from "node:module";
+import Module, { registerHooks } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { register as registerTypeScript } from "tsx/esm/api";
 import { isJsonObject } from "./json.js";
 import type {
   AgentInvocationPolicy,
@@ -27,13 +28,51 @@ export interface LoadedWorkflow {
   entryPath: string;
 }
 
-const sdkExtension = import.meta.url.endsWith(".ts") ? "ts" : "js";
-const sdkUrl = new URL(`./sdk.${sdkExtension}`, import.meta.url).href;
+const sourceHost = import.meta.url.endsWith(".ts");
+const runtimeSdkUrl = new URL(
+  sourceHost ? "../dist/sdk.js" : "./sdk.js",
+  import.meta.url,
+).href;
+const editorSdkUrl = new URL(
+  sourceHost ? "./sdk.ts" : "./sdk.d.ts",
+  import.meta.url,
+).href;
+
+interface CommonJsResolveOptions {
+  paths?: string[];
+}
+
+type CommonJsResolveFilename = (
+  request: string,
+  parent: NodeModule | undefined,
+  isMain: boolean,
+  options?: CommonJsResolveOptions,
+) => string;
+
+interface CommonJsModuleConstructor {
+  _resolveFilename: CommonJsResolveFilename;
+}
+
+registerTypeScript();
+const commonJsModule = Module as typeof Module & CommonJsModuleConstructor;
+const nextCommonJsResolve = commonJsModule._resolveFilename;
+// TSX routes CommonJS-shaped TypeScript through this resolver instead of registerHooks.
+commonJsModule._resolveFilename = function resolveWorkflowSdk(
+  request,
+  parent,
+  isMain,
+  options,
+) {
+  if (request === SDK_SPECIFIER) {
+    return fileURLToPath(runtimeSdkUrl);
+  }
+  return nextCommonJsResolve.call(this, request, parent, isMain, options);
+};
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === SDK_SPECIFIER) {
-      return { url: sdkUrl, shortCircuit: true };
+      return { url: runtimeSdkUrl, shortCircuit: true };
     }
     return nextResolve(specifier, context);
   },
@@ -64,12 +103,7 @@ export async function loadWorkflow(
 
   await ensureWorkflowSdkPath(entryPath);
   const entryUrl = pathToFileURL(entryPath).href;
-  const imported = entryPath.endsWith(".ts")
-    ? ((await import("tsx/esm/api")).tsImport(
-        entryUrl,
-        import.meta.url,
-      ) as Promise<WorkflowModule>)
-    : (import(entryUrl) as Promise<WorkflowModule>);
+  const imported = import(entryUrl) as Promise<WorkflowModule>;
   const workflowModule = await imported;
   const exported = workflowModule.default;
   let definition: WorkflowDefinition<JsonValue, JsonValue> | undefined;
@@ -113,11 +147,13 @@ async function ensureWorkflowSdkPath(entryPath: string): Promise<void> {
   const paths: JsonObject = isJsonObject(configuredPaths)
     ? configuredPaths
     : {};
-  let sdkReference = path.relative(
-    workflowsDirectory,
-    fileURLToPath(sdkUrl),
-  );
-  if (!sdkReference.startsWith(".")) sdkReference = `./${sdkReference}`;
+  const sdkPath = fileURLToPath(editorSdkUrl);
+  let sdkReference = path.relative(workflowsDirectory, sdkPath);
+  if (path.isAbsolute(sdkReference)) {
+    sdkReference = sdkPath;
+  } else if (!sdkReference.startsWith(".")) {
+    sdkReference = `./${sdkReference}`;
+  }
   sdkReference = sdkReference.split(path.sep).join("/");
   const refreshed: JsonObject = {
     ...config,

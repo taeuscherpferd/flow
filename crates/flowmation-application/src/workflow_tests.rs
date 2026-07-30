@@ -9,10 +9,12 @@ use std::time::Duration;
 use async_trait::async_trait;
 use flowmation_domain::agent::PackageSource;
 use flowmation_domain::fingerprint::fingerprint_directory;
+#[cfg(unix)]
+use flowmation_workflow_host::protocol::ExecCallback;
 use flowmation_workflow_host::protocol::{
     AgentInvocationPolicy, AgentRunCallback, AgentRunOptions, AgentRunResult, AgentSession,
-    ExecCallback, HumanCallback, HumanRequestKind, ModelRef, WorkflowMetadata,
-    WorkflowPresentation, WorkflowThinking, WorkflowTools,
+    HumanCallback, HumanRequestKind, ModelRef, WorkflowMetadata, WorkflowPresentation,
+    WorkflowThinking, WorkflowTools,
 };
 use flowmation_workflow_host::{WorkflowHost, WorkflowHostConfig, WorkflowHostError};
 use serde_json::{Value, json};
@@ -584,6 +586,7 @@ async fn exec_cancellation_terminates_descendant_processes() {
     assert!(!descendant.exists());
 }
 
+#[cfg(unix)]
 async fn wait_for_path(path: &Path) {
     for _attempt in 0..100 {
         if path.exists() {

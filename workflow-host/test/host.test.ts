@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -218,7 +219,7 @@ test("rejects a mismatched protocol version before loading workflows", async () 
   }
 });
 
-test("loads TypeScript through the virtual SDK and refreshes a portable editor path", async () => {
+test("loads TypeScript through the virtual SDK and refreshes the editor SDK path", async () => {
   const root = await mkdtemp(
     path.join(os.tmpdir(), "flowmation-host-typescript-"),
   );
@@ -293,7 +294,13 @@ test("loads TypeScript through the virtual SDK and refreshes a portable editor p
     const sdkReference =
       generated.compilerOptions.paths["flowmation/workflow"]?.[0];
     assert.ok(sdkReference);
-    assert.equal(path.isAbsolute(sdkReference), false);
+    const resolvedSdkPath = path.isAbsolute(sdkReference)
+      ? sdkReference
+      : path.resolve(workflowsDir, sdkReference);
+    assert.equal(
+      await realpath(resolvedSdkPath),
+      await realpath(path.resolve("src/sdk.ts")),
+    );
     assert.equal(
       generated.compilerOptions.noUncheckedIndexedAccess,
       true,

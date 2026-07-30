@@ -216,9 +216,10 @@ pub struct WorkflowHostConfig {
 impl WorkflowHostConfig {
     #[must_use]
     pub fn new(host_entry: impl Into<PathBuf>) -> Self {
+        let host_entry = host_entry.into();
         Self {
             executable: PathBuf::from("node"),
-            host_entry: host_entry.into(),
+            host_entry: dunce::simplified(&host_entry).to_path_buf(),
             arguments: Vec::new(),
             working_directory: None,
             environment: Vec::new(),
@@ -729,6 +730,17 @@ for await (const line of lines) {
         let script = directory.path().join("host.mjs");
         fs::write(&script, MOCK_HOST)?;
         Ok((directory, script))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn simplifies_verbatim_windows_host_paths() {
+        let config = WorkflowHostConfig::new(r"\\?\C:\workspace\workflow-host\dist\index.js");
+
+        assert_eq!(
+            config.host_entry,
+            PathBuf::from(r"C:\workspace\workflow-host\dist\index.js")
+        );
     }
 
     #[tokio::test]

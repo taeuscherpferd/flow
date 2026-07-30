@@ -27,6 +27,8 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::process::{configure_process_tree, terminate_process_tree};
+
 const HUMAN_SUSPENDED_ERROR: i32 = -32_010;
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 5 * 1024 * 1024;
 
@@ -592,8 +594,7 @@ impl WorkflowCallbackServices {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        #[cfg(unix)]
-        command.process_group(0);
+        configure_process_tree(&mut command);
         if let Some(cwd) = options.cwd.as_ref() {
             command.current_dir(cwd);
         } else if !active_run.project_dir.as_os_str().is_empty() {
@@ -956,18 +957,6 @@ async fn join_command_output(
     task: JoinHandle<std::io::Result<Vec<u8>>>,
 ) -> Result<Vec<u8>, RpcError> {
     task.await.map_err(rpc_internal)?.map_err(rpc_internal)
-}
-
-async fn terminate_process_tree(child: &mut tokio::process::Child, pid: Option<u32>) {
-    #[cfg(unix)]
-    if let Some(pid) = pid.and_then(|pid| i32::try_from(pid).ok()) {
-        let _result = nix::sys::signal::killpg(
-            nix::unistd::Pid::from_raw(pid),
-            nix::sys::signal::Signal::SIGTERM,
-        );
-    }
-    let _result = child.kill().await;
-    let _result = child.wait().await;
 }
 
 #[async_trait]

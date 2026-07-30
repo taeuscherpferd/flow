@@ -13,12 +13,12 @@ path = "src/main.rs"
 async-trait.workspace = true
 chrono.workspace = true
 clap.workspace = true
+crossterm.workspace = true
 flowmation-application = { path = "../flowmation-application" }
 flowmation-domain = { path = "../flowmation-domain" }
 flowmation-ollama = { path = "../flowmation-ollama" }
 flowmation-sqlite = { path = "../flowmation-sqlite" }
 flowmation-workflow-host = { path = "../flowmation-workflow-host" }
-nix.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

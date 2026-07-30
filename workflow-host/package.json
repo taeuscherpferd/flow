@@ -17,6 +17,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "pretest": "pnpm run build",
     "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {

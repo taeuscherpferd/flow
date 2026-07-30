@@ -1,4 +1,7 @@
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, IsTerminal, Write};
+
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::terminal;
 
 const DIM: &str = "\u{1b}[2m";
 const RESET: &str = "\u{1b}[0m";
@@ -65,24 +68,12 @@ fn read_tty_line(
     commands: Vec<String>,
     foreground_active: bool,
 ) -> Result<Option<String>, String> {
-    use nix::sys::termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr};
-
-    let stdin = io::stdin();
-    let original =
-        tcgetattr(&stdin).map_err(|error| format!("could not read terminal mode: {error}"))?;
-    let mut raw = original.clone();
-    cfmakeraw(&mut raw);
-    tcsetattr(&stdin, SetArg::TCSANOW, &raw)
+    let raw_mode = RawModeGuard::enable()
         .map_err(|error| format!("could not enable terminal input mode: {error}"))?;
 
     let result = (|| {
-        let mut input = stdin.lock();
         let mut output = io::stdout().lock();
-        let columns = std::env::var("COLUMNS")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(80)
-            .max(1);
+        let mut columns = terminal_columns();
         let mut editor = LineEditor::new(history, commands);
         let mut renderer = TerminalRenderer::default();
         output
@@ -100,14 +91,35 @@ fn read_tty_line(
             .and_then(|()| output.flush())
             .map_err(|error| format!("could not render prompt: {error}"))?;
         loop {
-            let Some(key) = read_key(&mut input)
-                .map_err(|error| format!("could not read terminal input: {error}"))?
-            else {
-                output
-                    .write_all(renderer.finish().as_bytes())
-                    .and_then(|()| output.flush())
-                    .map_err(|error| format!("could not render prompt: {error}"))?;
-                return Ok(None);
+            let terminal_event =
+                event::read().map_err(|error| format!("could not read terminal input: {error}"))?;
+            let key = match terminal_event {
+                Event::Key(key_event) => {
+                    let Some(key) = key_from_event(key_event) else {
+                        continue;
+                    };
+                    key
+                }
+                Event::Paste(text) => Key::Text(text),
+                Event::Resize(width, _) => {
+                    columns = usize::from(width).max(1);
+                    output
+                        .write_all(
+                            renderer
+                                .render(
+                                    prompt,
+                                    editor.buffer(),
+                                    editor.completion().unwrap_or_default(),
+                                    editor.cursor,
+                                    columns,
+                                )
+                                .as_bytes(),
+                        )
+                        .and_then(|()| output.flush())
+                        .map_err(|error| format!("could not render prompt: {error}"))?;
+                    continue;
+                }
+                Event::FocusGained | Event::FocusLost | Event::Mouse(_) => continue,
             };
             match editor.handle(key, foreground_active) {
                 EditorAction::Continue => {
@@ -143,11 +155,67 @@ fn read_tty_line(
             }
         }
     })();
-    let restore = tcsetattr(&stdin, SetArg::TCSANOW, &original)
+    let restore = raw_mode
+        .restore()
         .map_err(|error| format!("could not restore terminal input mode: {error}"));
     match result {
         Ok(value) => restore.map(|()| value),
         Err(error) => Err(error),
+    }
+}
+
+struct RawModeGuard {
+    enabled: bool,
+}
+
+impl RawModeGuard {
+    fn enable() -> io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        Ok(Self { enabled: true })
+    }
+
+    fn restore(mut self) -> io::Result<()> {
+        let result = terminal::disable_raw_mode();
+        self.enabled = false;
+        result
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        if self.enabled {
+            let _result = terminal::disable_raw_mode();
+        }
+    }
+}
+
+fn terminal_columns() -> usize {
+    terminal::size()
+        .map_or(80, |(width, _)| usize::from(width))
+        .max(1)
+}
+
+fn key_from_event(event: KeyEvent) -> Option<Key> {
+    if event.kind == KeyEventKind::Release {
+        return None;
+    }
+    match event.code {
+        KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => Some(Key::CtrlC),
+        KeyCode::Char('d') if event.modifiers.contains(KeyModifiers::CONTROL) => Some(Key::CtrlD),
+        KeyCode::Char(value) if !event.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Key::Text(value.to_string()))
+        }
+        KeyCode::Left => Some(Key::Left),
+        KeyCode::Right => Some(Key::Right),
+        KeyCode::Home => Some(Key::Home),
+        KeyCode::End => Some(Key::End),
+        KeyCode::Up => Some(Key::Up),
+        KeyCode::Down => Some(Key::Down),
+        KeyCode::Backspace => Some(Key::Backspace),
+        KeyCode::Delete => Some(Key::Delete),
+        KeyCode::Tab => Some(Key::Tab),
+        KeyCode::Enter => Some(Key::Enter),
+        _ => None,
     }
 }
 
@@ -339,68 +407,6 @@ impl TerminalRenderer {
     }
 }
 
-fn read_key(input: &mut impl Read) -> io::Result<Option<Key>> {
-    let mut first = [0_u8; 1];
-    if input.read(&mut first)? == 0 {
-        return Ok(None);
-    }
-    Ok(Some(match first[0] {
-        3 => Key::CtrlC,
-        4 => Key::CtrlD,
-        8 | 127 => Key::Backspace,
-        9 => Key::Tab,
-        b'\r' | b'\n' => Key::Enter,
-        27 => read_escape_key(input)?,
-        byte if byte.is_ascii() => Key::Text(char::from(byte).to_string()),
-        byte => {
-            let length = utf8_sequence_length(byte);
-            let mut bytes = vec![byte; length];
-            input.read_exact(&mut bytes[1..])?;
-            Key::Text(
-                String::from_utf8(bytes)
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
-            )
-        }
-    }))
-}
-
-fn read_escape_key(input: &mut impl Read) -> io::Result<Key> {
-    let mut sequence = [0_u8; 2];
-    input.read_exact(&mut sequence[..1])?;
-    if sequence[0] != b'[' {
-        return Ok(Key::Text(String::new()));
-    }
-    input.read_exact(&mut sequence[1..])?;
-    Ok(match sequence[1] {
-        b'A' => Key::Up,
-        b'B' => Key::Down,
-        b'C' => Key::Right,
-        b'D' => Key::Left,
-        b'H' => Key::Home,
-        b'F' => Key::End,
-        b'3' => {
-            let mut terminator = [0_u8; 1];
-            input.read_exact(&mut terminator)?;
-            if terminator[0] == b'~' {
-                Key::Delete
-            } else {
-                Key::Text(String::new())
-            }
-        }
-        _ => Key::Text(String::new()),
-    })
-}
-
-fn utf8_sequence_length(first: u8) -> usize {
-    if first & 0b1111_0000 == 0b1111_0000 {
-        4
-    } else if first & 0b1110_0000 == 0b1110_0000 {
-        3
-    } else {
-        2
-    }
-}
-
 fn previous_boundary(value: &str, index: usize) -> usize {
     value[..index]
         .char_indices()
@@ -417,7 +423,41 @@ fn next_boundary(value: &str, index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{EditorAction, Key, LineEditor, TerminalRenderer};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+    use super::{EditorAction, Key, LineEditor, TerminalRenderer, key_from_event};
+
+    #[test]
+    fn maps_cross_platform_terminal_events() {
+        assert_eq!(
+            key_from_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            Some(Key::Left)
+        );
+        assert_eq!(
+            key_from_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Some(Key::CtrlC)
+        );
+        assert_eq!(
+            key_from_event(KeyEvent::new(KeyCode::Char('é'), KeyModifiers::NONE)),
+            Some(Key::Text("é".to_owned()))
+        );
+    }
+
+    #[test]
+    fn ignores_release_and_unhandled_control_events() {
+        assert_eq!(
+            key_from_event(KeyEvent::new_with_kind(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+                KeyEventKind::Release
+            )),
+            None
+        );
+        assert_eq!(
+            key_from_event(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)),
+            None
+        );
+    }
 
     #[test]
     fn browses_history_and_restores_draft() {

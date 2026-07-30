@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
+use crate::process::{configure_process_tree, terminate_process_tree};
 use crate::tool::{
     Tool, ToolEffect, ToolExecutionContext, ToolResult, object_schema, string_schema_property,
 };
@@ -204,8 +205,7 @@ async fn execute_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    #[cfg(unix)]
-    command.process_group(0);
+    configure_process_tree(&mut command);
     let mut child = command.spawn().map_err(CommandFailure::Io)?;
     let pid = child.id();
     let stdout = child.stdout.take().ok_or_else(|| {
@@ -271,18 +271,6 @@ async fn read_capped(mut reader: impl AsyncRead + Unpin) -> std::io::Result<Capt
         bytes: retained,
         truncated,
     })
-}
-
-async fn terminate_process_tree(child: &mut tokio::process::Child, pid: Option<u32>) {
-    #[cfg(unix)]
-    if let Some(pid) = pid.and_then(|pid| i32::try_from(pid).ok()) {
-        let _result = nix::sys::signal::killpg(
-            nix::unistd::Pid::from_raw(pid),
-            nix::sys::signal::Signal::SIGTERM,
-        );
-    }
-    let _result = child.kill().await;
-    let _result = child.wait().await;
 }
 
 #[cfg(unix)]
@@ -394,12 +382,22 @@ mod tests {
         let mut arguments = Map::new();
         arguments.insert(
             "command".to_owned(),
-            Value::String("printf output; printf problem >&2; exit 7".to_owned()),
+            Value::String(command_with_output_and_failure().to_owned()),
         );
         let result = RunCommandTool.execute(arguments, &context).await;
         assert!(!result.ok);
         assert!(result.content.contains("exit code: 7"));
         assert!(result.content.contains("stdout:\noutput"));
         assert!(result.content.contains("stderr:\nproblem"));
+    }
+
+    #[cfg(unix)]
+    const fn command_with_output_and_failure() -> &'static str {
+        "printf output; printf problem >&2; exit 7"
+    }
+
+    #[cfg(windows)]
+    const fn command_with_output_and_failure() -> &'static str {
+        "echo output & echo problem 1>&2 & exit /b 7"
     }
 }

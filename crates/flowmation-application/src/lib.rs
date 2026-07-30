@@ -5,6 +5,7 @@ pub mod events;
 pub mod manager;
 pub mod model;
 pub mod policy;
+mod process;
 pub mod provider;
 pub mod registry;
 pub mod scheduling;
