@@ -1,277 +1,232 @@
 # Flowmation
 
-Flowmation is a terminal-based coding agent with programmable developer
-workflows. It connects to Ollama-compatible model providers and lets normal
-JavaScript or TypeScript coordinate agents, commands, model escalation,
-bounded parallel work, human decisions, named specialists, and durable
-workflow schedules.
+Flowmation is a terminal coding agent with a Rust-owned application core and a
+small Node.js workflow host. Rust owns configuration, agents, models, tools,
+authorization, persistence, workflow orchestration, scheduling, and the CLI.
+The Node host preserves trusted `WORKFLOW.js` and `WORKFLOW.ts` modules,
+including their Node API and workflow-local dependency access.
 
-## Getting started
+## Requirements
 
-```sh
-pnpm install
-pnpm dev
-```
+- Rust 1.96 or newer
+- Node.js 24 or newer and pnpm for the workflow compatibility host
+- An Ollama-compatible provider
 
-To install the built CLI as a global command on your machine:
+The current CLI initializes workflow discovery before its first normal agent
+turn so it can register `run_workflow`. Consequently, interactive chat as well
+as explicit workflow commands requires a built host and a compatible Node
+runtime. Configuration, model setup, and non-workflow repository operations
+remain Rust-only.
 
-```powershell
-pnpm build
-pnpm add --global .
-```
+## Build, test, and install
 
-After linking, run Flowmation from any directory with:
-
-```powershell
-flowmation
-```
-
-If the command is not found, run `pnpm setup`, restart your terminal, and run
-`pnpm add --global .` again.
-
-Flowmation requires Node.js 24 or newer. On first launch it creates
-`~/.work-agent` and asks you to configure a provider with `/model`.
-
-Configuration is loaded from both `~/.work-agent` and
-`<launch-directory>/.work-agent`, with project values taking precedence.
-
-## Configured agents
-
-Named agents are self-contained packages under
-`~/.work-agent/agents/<name>` or
-`<project>/.work-agent/agents/<name>`. A project package atomically replaces a
-global package with the same name; package directories never merge.
-
-```text
-agents/finance/
-  AGENT.yaml
-  SOUL.md
-  AGENTS.md
-  CONTEXT.md
-  context/
-  skills/
-  workflows/
-```
-
-Use `/agent` to list packages, `/agent finance` to enter a specialist's
-persistent project-scoped conversation, and `/agent main` to return to the
-coordinator. Coordinator delegation uses a fresh isolated specialist session
-and never reads or changes that specialist's direct-chat history.
-
-Specialist resources use canonical IDs such as
-`finance/reconcile-transactions`; their bodies remain lazy-loaded. See
-[docs/agents.md](docs/agents.md) for the package and runtime model.
-
-## Workflows
-
-For the full workflow authoring guide, see [docs/workflows.md](docs/workflows.md).
-
-Put each workflow in a directory named after the workflow:
-
-```text
-~/.work-agent/workflows/review-change/WORKFLOW.ts
-<project>/.work-agent/workflows/review-change/WORKFLOW.ts
-```
-
-`WORKFLOW.js` is also supported. A project workflow overrides a global
-workflow with the same name. Directory and exported workflow names must match
-and use lowercase kebab-case. Flowmation creates the ESM and TypeScript
-configuration needed for the virtual `flowmation/workflow` import; workflow
-authors only maintain `WORKFLOW.ts`.
-
-```ts
-import { defineWorkflow } from "flowmation/workflow";
-
-interface ReviewInput {
-  request: string;
-}
-
-export default defineWorkflow<ReviewInput>({
-  name: "review-change",
-  description: "Implements a change and independently reviews it",
-  input: {
-    schema: {
-      type: "object",
-      properties: {
-        request: { type: "string", minLength: 1 },
-      },
-      required: ["request"],
-      additionalProperties: false,
-    },
-  },
-  agentInvocation: "confirm",
-  presentation: "agent",
-  async run(context, input) {
-    const diff = await context.exec("git", ["diff"]);
-    const implementation = await context.checkpoint("implementation", async () => {
-      const implementer = await context.agents.create({
-        model: "implementer",
-      });
-      return (await implementer.run(
-        `${input.request}\n\nCurrent diff:\n${diff.stdout}`,
-      )).content;
-    });
-
-    const result = await context.elevate({
-      model: "reviewer",
-      thinking: "high",
-      attempts: 2,
-      context: { mode: "fresh" },
-      operation: async ({ session, attempt, previousResults }) => ({
-        attempt,
-        review: (
-          await session.run(
-            `Review this result:\n${implementation}\n` +
-              `Previous rejected reviews: ${JSON.stringify(previousResults)}`,
-          )
-        ).content,
-      }),
-      check: ({ review }) => ({
-        passed: review.includes("APPROVED"),
-        message: "The reviewer must explicitly approve the result.",
-      }),
-      fallback: async ({ results }) => {
-        const approved = await context.human.approve({
-          prompt: "The automated review failed. Accept the latest result?",
-          details: results.at(-1)?.review,
-        });
-        return { approved, review: results.at(-1)?.review ?? "" };
-      },
-    });
-
-    return context.output.agent({
-      implementation,
-      review: result,
-    });
-  },
-});
-```
-
-Omit `input` to receive the command remainder as a string. Object-schema
-workflows receive validated JSON:
-
-```text
-/review-change {"request":"add workflow support"}
-```
-
-### Agent sessions
-
-- `context.agents.create(...)` creates a clean session.
-- Calling `run` repeatedly on the same session shares its history.
-- `context.agents.fork(session, ...)` copies the current history and then
-  diverges.
-- Each `run` can select `thinking: "off"`, `"on"`, `"low"`, `"medium"`, or
-  `"high"` when the model supports it. See [docs/workflows.md](docs/workflows.md)
-  for the full per-turn behavior.
-
-Model selectors accept `provider/model`, a unique bare model name, or an
-unlimited user-defined alias:
-
-```json
-{
-  "modelAliases": {
-    "implementer": "local/qwen3:8b",
-    "reviewer": "local/qwen3:32b"
-  }
-}
-```
-
-### Execution and recovery
-
-Workflows normally execute from top to bottom. Runs, status, and final outputs
-are stored in `~/.work-agent/runs.sqlite`, keyed by project directory.
-Agent calls, commands, checks, and mapped work run normally and are not
-automatically replayed or cached.
-
-Recovery is explicit:
-
-- `context.checkpoint(key, operation)` stores an expensive JSON result. A
-  resumed run reuses it.
-- `context.effect(key, { idempotencyKey, run })` stores a completed external
-  action. If the process stops while the action is running, it may run again
-  with the same idempotency key. The operation must pass that key to the
-  external system or check whether the action already happened.
-- Human responses are retained so resuming does not ask the same unchanged
-  question twice.
-- `context.exec(command, args, options)` runs a cancellation-aware process
-  with time and output limits.
-- `context.map(items, { concurrency, run })` performs bounded parallel work
-  while preserving result order.
-
-Run inspection, resume, and cancellation commands are scoped to the current
-project directory.
-
-Workflow source is fingerprinted when a run starts, including every file in
-the workflow directory. A paused run cannot resume against changed source;
-restore the original workflow or start a new run.
-
-Workflow files are trusted local code and may use normal Node.js APIs.
-Filesystem, network, process, time, randomness, and other direct side effects
-are not cached unless the workflow deliberately wraps their JSON result in a
-checkpoint.
-
-## Scheduling
-
-Schedules run configured workflows, never arbitrary prompts. They capture the
-owning agent, validated input, project working directory, five-field cron
-expression, IANA timezone, and complete package fingerprint. Creation and
-reauthorization are the approval boundaries for unattended execution.
-The detached worker checks that fingerprint before loading workflow code.
-
-The detached worker survives CLI exit, but v1 does not install an OS boot
-service: launch Flowmation once after a reboot. Missed occurrences coalesce
-into one catch-up run, and later occurrences skip while an earlier run remains
-non-terminal.
-
-See [docs/scheduling.md](docs/scheduling.md),
-[docs/security.md](docs/security.md), and
-[docs/migration.md](docs/migration.md).
-
-## Commands
-
-- `/help` shows command help.
-- `/agent [name]` lists agents or switches the active conversation.
-- `/clear` clears only the active conversation.
-- `/model` lists, configures, or switches the active conversation's model.
-- `/workflows` lists workflows owned by the active agent.
-- `/workflow <name> [input]` runs an active-agent workflow in the foreground.
-- `/<workflow-name> [input]` invokes a workflow directly.
-- `/runs` lists recent project runs.
-- `/workflow-debug on|off` toggles live workflow and sub-agent status logging.
-- `/run <id>` inspects a run and presents completed output.
-- `/resume <id>` resumes a waiting, interrupted, or stale running run.
-- `/cancel <id>` cancels a run.
-- `/schedules` lists project schedules.
-- `/schedule <id>` inspects a schedule and its occurrences.
-- `/schedule pause|resume|delete|reauthorize <id>` manages a schedule.
-- `/<skill-name>` loads an active-agent skill.
-- `/<agent>/<skill>` loads a specialist skill from main.
-- `/exit` or `/quit` exits Flowmation.
-
-Use the Up and Down arrow keys at the main prompt to browse earlier input. The
-most recent 500 entries persist across sessions in
-`~/.work-agent/input-history.json`. If you start typing before browsing,
-returning to the newest position restores that draft. Setup answers and
-workflow approval responses are not included.
-
-Ctrl+C stops an active model response first, then a foreground workflow. At the
-prompt, it clears any entered text. Press Ctrl+C twice on an empty prompt to
-exit.
-
-Workflows may set `agentInvocation` to `disabled`, `confirm`, or `automatic`.
-Eligible workflow descriptions are given to the main agent through its
-`run_workflow` tool. Confirmed workflows show their proposed input and require
-user approval before running.
-
-
-## Development
+Install the workflow-host dependencies and build the complete workspace:
 
 ```sh
-pnpm test
+pnpm install --frozen-lockfile
 pnpm run build
 ```
 
-The CLI entry point is `src/index.ts`. Workflow discovery, storage, agent
-coordination, and execution live under `src/workflows`. Internal modules use the
-`#src/*` package import alias; relative module imports are reserved for generated
-workflow fixtures that exercise workflow-local dependencies.
+The root build runs:
+
+```sh
+cargo build --workspace
+pnpm --dir workflow-host run build
+```
+
+Run the Rust and workflow-host suites:
+
+```sh
+pnpm test
+```
+
+Or run them independently:
+
+```sh
+cargo test --workspace --all-features
+pnpm --dir workflow-host test
+```
+
+Formatting and lint checks are:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+```
+
+Run the CLI from the checkout:
+
+```sh
+cargo run -p flowmation-cli
+```
+
+Install the Rust executable:
+
+```sh
+cargo install --path crates/flowmation-cli
+```
+
+`cargo install` does not install the Node workflow host. An installed
+executable must be pointed at a built host:
+
+```sh
+FLOWMATION_WORKFLOW_HOST=/absolute/path/to/workflow-host/dist/index.js flowmation
+```
+
+Without that variable, a binary built in this checkout uses
+`workflow-host/dist/index.js` relative to the crate source path embedded at
+compile time.
+
+## Workspace architecture
+
+| Crate/package | Responsibility |
+| --- | --- |
+| `flowmation-domain` | Compatibility-sensitive IDs and records, state enums, model configuration, schema validation, five-field cron behavior, fingerprints, and input history. |
+| `flowmation-application` | Provider/tool interfaces, authorization, agents, registries, workflow callbacks and durable execution, scheduling services, and UI-neutral events/cancellation. |
+| `flowmation-sqlite` | `runs.sqlite` repositories, ordered migrations, application adapters, schedule leases/occurrences/notifications, and legacy compatibility. |
+| `flowmation-ollama` | Ollama-compatible HTTP provider adapter. |
+| `flowmation-workflow-host` | Rust child-process client and typed, versioned bidirectional JSON-RPC protocol. |
+| `flowmation-cli` | Terminal adapter, first-model setup, raw-mode line editor, run management, and the internal schedule worker. |
+| `flowmation-test-support` | Reusable fake providers, brokers, clocks, repositories, and event collectors. |
+| `workflow-host/` | Remaining Node 24+ workflow loader and authoring SDK. |
+
+The application crate has no terminal or SQLite dependency. Those concerns are
+adapters, allowing another UI or persistence implementation to use the same
+domain and application services.
+
+## First run and configuration
+
+On first launch Flowmation creates the global scaffold under
+`~/.work-agent/`. If no model is configured, `/model` starts an interactive
+Ollama-compatible provider setup.
+
+Configuration is loaded from:
+
+```text
+~/.work-agent/
+<launch-directory>/.work-agent/
+```
+
+Project model and application values override or extend global values
+according to the Rust merge rules. Project `AGENTS.md` follows the global
+instructions, while a project `SOUL.md` replaces the global soul.
+
+## Configured agents
+
+Agent packages live under:
+
+```text
+~/.work-agent/agents/<name>/
+<project>/.work-agent/agents/<name>/
+```
+
+A project package atomically replaces a same-named global package. Required
+files are `AGENT.yaml`, `SOUL.md`, and `AGENTS.md`; `CONTEXT.md`, `context/`,
+and `skills/` are optional. The package uses the legacy SHA-256 fingerprint,
+and symbolic links are rejected.
+
+`/agent` lists packages, `/agent <name>` opens that agent's project-scoped
+conversation, and `/agent main` returns to the coordinator. Conversations are
+stored in `~/.work-agent/runs.sqlite`; system messages are rebuilt and never
+persisted.
+
+The runtime supports specialist chat and isolated workflow-created agent
+sessions. Coordinator delegation tools and interactive agent-package-local
+workflow discovery are not implemented. See [docs/agents.md](docs/agents.md).
+
+## Workflows and the Node host
+
+Interactive workflows are discovered from:
+
+```text
+~/.work-agent/workflows/<name>/WORKFLOW.ts
+<project>/.work-agent/workflows/<name>/WORKFLOW.js
+```
+
+Exactly one entry file may exist in a workflow directory. Project workflows
+replace same-named global workflows. Directory and exported names must match
+and use lowercase kebab-case.
+
+Rust fingerprints the complete directory, asks the Node host to inspect the
+module, validates input, creates the durable run, owns all callbacks and
+durability records, and commits the final status. The host imports the trusted
+module and runs its `run` callback.
+
+The protocol is newline-delimited JSON-RPC 2.0 over stdio, version `1`. Rust
+performs `host.handshake` before using workflow methods, and SDK operations
+return to Rust as `sdk.*` requests. Only protocol messages use stdout;
+diagnostics use stderr.
+
+Workflow code is trusted local code. It can use Node APIs and local
+dependencies, so Node 24+ remains required for workflows. See
+[docs/workflows.md](docs/workflows.md).
+
+## SQLite compatibility
+
+Rust opens the existing `~/.work-agent/runs.sqlite` in place. It retains the
+legacy 5-second busy timeout, WAL mode, foreign-key enforcement, table and
+column names, JSON formats, status strings, timestamps, indexes, and schedule
+status trigger.
+
+Five ordered Rust migrations create or complete workflow storage, add
+agent/trigger metadata, create schedule storage, install the schedule-run
+trigger, and create conversation storage. Existing rows are not rewritten;
+historical runs default to `agent_name = 'main'` and a manual trigger. See
+[docs/migration.md](docs/migration.md).
+
+## CLI commands
+
+The Rust REPL implements:
+
+- `/help`
+- `/agent [name]`
+- `/clear`
+- `/model [name]`
+- `/workflows`
+- `/workflow <name> [input]` and `/<workflow-name> [input]`
+- `/<skill-name> [message]`
+- `/runs`
+- `/run <id>`
+- `/resume <id>`
+- `/cancel <id>`
+- `/workflow-debug [on|off]`
+- `/schedules`
+- `/schedule <id>`
+- `/schedule pause|resume|delete <id>`
+- `/exit` and `/quit`
+
+Run commands are scoped to the launch project and active agent. `/resume`
+replays waiting or interrupted runs with checkpoint, effect, and human-step
+durability. `/cancel` changes the durable status, but it cannot signal an
+execution owned by a different process.
+
+Normal text is sent to the active agent. On a TTY the Rust line editor supports
+cursor movement, deletion, persistent history navigation, wrapped-row redraw,
+dimmed slash-command completion, and the two-stage Ctrl+C behavior. Press Tab
+or Right Arrow at the end of the input to accept the suggested built-in,
+workflow, or skill command. Non-TTY stdin uses line-oriented input.
+
+Schedule creation and reauthorization exist as application services but are
+not registered as CLI/model tools. The CLI can manage records already present
+in the database.
+
+## Schedule worker
+
+The executable includes a Rust worker:
+
+```sh
+cargo run -p flowmation-cli -- worker --once
+cargo run -p flowmation-cli -- worker --database /path/to/runs.sqlite --once
+cargo run -p flowmation-cli -- worker
+```
+
+`--once` performs one leased tick. Without it, the worker polls every 15
+seconds until Ctrl+C. It recovers non-terminal occurrences, coalesces downtime
+into the oldest due occurrence, validates the authorized source fingerprint
+before module evaluation, and executes through the same Node host and durable
+Rust callbacks.
+
+The CLI does not automatically detach or install this worker. Run it under a
+process supervisor for unattended schedules. See
+[docs/scheduling.md](docs/scheduling.md) and
+[docs/security.md](docs/security.md) for the operational boundaries.

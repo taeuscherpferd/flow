@@ -1,66 +1,97 @@
-# Workflow SDK reference
+# Workflow SDK and host boundary
 
-Workflow files import the SDK from `flowmation/workflow`:
+Flowmation preserves user-authored JavaScript and TypeScript workflows instead
+of translating them to Rust. Workflow files are trusted Node.js modules. Rust
+owns discovery, validation, durable records, agent and process callbacks,
+cancellation, human input, and final run status.
+
+Node.js 24 or newer is required for every workflow discovery or execution
+path. The current CLI initializes discovery before its first normal agent turn
+to register `run_workflow`, so interactive chat also requires the host even
+when the eventual turn does not invoke a workflow.
+
+## Build the host
+
+```sh
+pnpm install --frozen-lockfile
+pnpm --dir workflow-host run build
+pnpm --dir workflow-host test
+```
+
+The Rust CLI uses `workflow-host/dist/index.js` from the checkout by default.
+Set an absolute path when packaging the executable separately:
+
+```sh
+FLOWMATION_WORKFLOW_HOST=/absolute/path/to/workflow-host/dist/index.js flowmation
+```
+
+## Discovery
+
+The interactive CLI scans:
+
+```text
+~/.work-agent/workflows/
+<project>/.work-agent/workflows/
+```
+
+Project records replace same-named global records. Interactive
+`agents/<name>/workflows/` discovery is not implemented.
+
+Each lowercase kebab-case directory must contain exactly one entry:
+
+```text
+review-change/
+  WORKFLOW.js
+```
+
+or:
+
+```text
+review-change/
+  WORKFLOW.ts
+```
+
+The default export's name must match the directory, its description must be
+non-empty, and it must provide a `run` function. Symbolic entry paths are
+rejected by the host, and Rust rejects symbolic links anywhere in the complete
+fingerprinted directory.
+
+Rust fingerprints the directory during discovery and verifies it before a new
+or resumed execution. A mismatch rejects the run; a resume is persisted as
+`version-mismatch`. There is necessarily a small time-of-check/time-of-import
+window between the final hash and the Node module import. Workflow modules are
+trusted local code, so do not mutate an authorized workflow concurrently with
+execution.
+
+## Definition
 
 ```ts
 import { defineWorkflow } from "flowmation/workflow";
-```
 
-The SDK exports `defineWorkflow`, `isWorkflowOutput`, `workflowOutputApi`, and
-all of the types listed below.
-
-## API at a glance
-
-| Function | Used for |
-| --- | --- |
-| `defineWorkflow(definition)` | Defines and type-checks the workflow object that the workflow file default-exports. |
-| `isWorkflowOutput(result)` | Checks whether a value was created by an output presentation helper. |
-| `workflowOutputApi.direct(value)` | Wraps a JSON value so Flowmation prints it directly. |
-| `workflowOutputApi.agent(value)` | Wraps a JSON value so the main agent presents it to the user. |
-| `definition.run(context, input)` | Implements the workflow entry point that Flowmation calls with the execution context and validated input. |
-| `context.output.direct(value)` | Selects direct CLI presentation for the current workflow result. |
-| `context.output.agent(value)` | Selects main-agent presentation for the current workflow result. |
-| `context.agents.create(options)` | Creates a new agent session with empty conversation history. |
-| `context.agents.fork(session, options?)` | Creates a separate agent session by copying an existing session's history. |
-| `session.run(prompt, options?)` | Sends a prompt to an agent session and returns its text response and model. |
-| `context.human.approve(request)` | Asks the user a yes-or-no question and returns a boolean. |
-| `context.human.choose(request)` | Asks the user to select from supplied choices and returns the selected value. |
-| `context.human.ask(request)` | Asks the user for free-form text and returns the answer. |
-| `context.checkpoint(key, operation)` | Runs an operation once per workflow run and reuses its stored JSON result after resume. |
-| `context.effect(key, options)` | Runs an idempotent external action and reuses its stored JSON result after completion. |
-| `effectOptions.run(effectContext)` | Implements the external action passed to `context.effect`, receiving its idempotency key and cancellation signal. |
-| `context.exec(command, args?, options?)` | Runs a cancellation-aware child process and captures its exit code and output. |
-| `context.map(items, options)` | Processes items with bounded parallelism while preserving result order. |
-| `mapOptions.run(item, index)` | Implements the per-item asynchronous work passed to `context.map`. |
-| `context.elevate(options)` | Repeats a model-backed operation until its check passes or its fallback handles failure. |
-| `elevationOptions.operation(attempt)` | Produces one candidate result using the selected agent session and prior failed results. |
-| `elevationOptions.check(value)` | Decides whether an elevation result passes and may attach a message or JSON diagnostic data. |
-| `elevationOptions.fallback(failure)` | Optionally produces a final value after every elevation attempt fails its check. |
-| `context.log(message, data?)` | Emits a workflow debug event visible when workflow debug logging is enabled. |
-| `humanAdapter.request(prompt)` | Implements the runtime integration that collects a typed human response or allows the run to wait. |
-
-## `defineWorkflow`
-
-```ts
-defineWorkflow<TInput = string, TOutput = JsonValue>(
-  definition: WorkflowDefinition<TInput, TOutput>,
-): WorkflowDefinition<TInput, TOutput>
-```
-
-This is a typed identity function. It returns the definition unchanged. A
-workflow must default-export its result:
-
-```ts
 export default defineWorkflow({
-  name: "example",
-  description: "An example workflow",
+  name: "hello",
+  description: "Returns a greeting",
+  input: {
+    schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", minLength: 1 },
+      },
+      required: ["name"],
+      additionalProperties: false,
+    },
+  },
+  agentInvocation: "confirm",
+  presentation: "direct",
   async run(context, input) {
-    return { input };
+    await context.log("creating greeting", input);
+    return context.output.direct({ message: `Hello ${input.name}` });
   },
 });
 ```
 
-## `WorkflowDefinition`
+`defineWorkflow` is a typed identity function. The host also exports
+`isWorkflowOutput`, `workflowOutputApi`, and the SDK types.
 
 ```ts
 interface WorkflowDefinition<TInput = string, TOutput = JsonValue> {
@@ -76,22 +107,27 @@ interface WorkflowDefinition<TInput = string, TOutput = JsonValue> {
 }
 ```
 
-`name`, the workflow directory name, and the command alias must match. Names
-must be lowercase kebab-case. `presentation` defaults to `direct`.
+`agentInvocation` defaults to `disabled`. After discovery, Rust registers the
+model-facing `run_workflow` tool for agents whose allowlist includes it:
 
-`agentInvocation` defaults to `disabled`:
+- `disabled` workflows are not eligible;
+- `confirm` workflows show the description and exact input for approval;
+- `automatic` workflows run without that workflow-specific confirmation.
 
-| Value | Behavior |
-| --- | --- |
-| `disabled` | The main agent cannot call the workflow. |
-| `confirm` | The main agent can propose it, but the user must approve each run. |
-| `automatic` | The main agent can run it without workflow-specific approval. |
+The tool resolves the record again at execution, so a cached tool uses the
+current workflow policy. Direct commands can run any discovered workflow.
+
+`presentation` defaults to `direct`. `context.output.direct` prints the value;
+`context.output.agent` presents the durable JSON through a fresh, tool-free
+agent session without changing direct conversation history.
 
 ## Input schemas
 
-`input.schema` determines the type passed to `run` and validates it before the
-run starts. Without `input`, the input is the command remainder as a string.
-The root schema must be a `string` or `object` schema.
+Without `input`, Rust passes the command remainder as a string. With a string
+root schema, it validates that string. With an object root schema, it parses
+the remainder as JSON, using `{}` for an empty remainder, and validates it.
+
+Supported schema nodes are:
 
 ```ts
 type WorkflowSchema =
@@ -108,15 +144,10 @@ type WorkflowSchema =
     };
 ```
 
-For an object schema, the command input must be JSON:
+Only `string` and `object` are valid roots. Nested object, array, number,
+boolean, and string schemas are supported.
 
-```text
-/workflow example {"name":"Ada"}
-```
-
-## `WorkflowContext`
-
-Every `run` receives this object:
+## Workflow context
 
 ```ts
 interface WorkflowContext {
@@ -139,7 +170,7 @@ interface WorkflowContext {
     args?: string[],
     options?: WorkflowExecOptions,
   ): Promise<WorkflowExecResult>;
-  map<TItem, TResult>(
+  map<TItem extends JsonValue, TResult extends JsonValue>(
     items: readonly TItem[],
     options: WorkflowMapOptions<TItem, TResult>,
   ): Promise<TResult[]>;
@@ -150,283 +181,99 @@ interface WorkflowContext {
 }
 ```
 
-### Context properties
+Protocol values must be JSON values. Numbers must be finite, objects must be
+plain objects, and symbol-keyed or circular values are rejected.
 
-| Property | Meaning |
-| --- | --- |
-| `runId` | Unique ID of the current run. |
-| `projectDir` | Absolute launch/project directory. `exec` uses it by default. |
-| `signal` | Aborted when the run is cancelled. Pass it to cancellable external APIs. |
-| `output` | Helpers to choose how the completed result is presented. |
-| `agents` | Create and fork agent sessions. |
-| `human` | Ask the user for approval, a choice, or text. |
+### Agent sessions
 
-### `context.output`
+`context.agents.create` starts empty history. Repeated `run` calls share that
+history. `fork` copies the current history into a distinct session. A model can
+be provider-qualified, an unambiguous bare name, or an alias; omission inherits
+the active agent model.
 
-```ts
-interface WorkflowOutputApi {
-  direct<TValue extends JsonValue>(value: TValue): WorkflowOutputValue<TValue>;
-  agent<TValue extends JsonValue>(value: TValue): WorkflowOutputValue<TValue>;
-}
-```
+Per-run `tools: "default" | "none"` and all workflow thinking modes are
+forwarded to Rust and are not sticky. The current implementation uses the
+active agent's profile and tool registry rather than selecting a separate
+package by workflow ownership.
 
-Both helpers return the value unchanged and attach a presentation mode for this
-run. `direct` prints JSON to the CLI. `agent` asks the main agent to present
-the value. A normal return uses the definition's `presentation`.
+### Checkpoints and effects
 
-### `context.agents`
+Rust stores each step's kind, stable input, state, and JSON output. Repeating a
+completed key in the same durable run returns its stored output. Reusing a key
+with a different kind or input fails. Keys may contain ASCII letters, numbers,
+`.`, `_`, and `-`.
 
-```ts
-interface WorkflowAgentsApi {
-  create(options: { model: string }): Promise<WorkflowAgentSession>;
-  fork(
-    session: WorkflowAgentSession,
-    options?: { model?: string },
-  ): Promise<WorkflowAgentSession>;
-}
+`/resume <run-id>` executes the stored input again through the current module.
+Completed checkpoints and effects are reused, completed human answers are
+replayed, and ordinary agent calls run again. An interrupted effect can run
+again before its local completion commits, so external systems must honor the
+provided idempotency key.
 
-interface WorkflowAgentSession {
-  readonly id: string;
-  readonly model: ModelRef;
-  run(
-    prompt: string,
-    options?: {
-      tools?: "default" | "none";
-      thinking?: WorkflowThinking;
-    },
-  ): Promise<{ content: string; model: ModelRef }>;
-}
+### Human requests
 
-type WorkflowThinking =
-  | "default"
-  | "off"
-  | "on"
-  | "low"
-  | "medium"
-  | "high";
+`context.human.approve`, `choose`, and `ask` are serialized before reaching the
+terminal broker. A prompt failure does not poison the queue.
 
-interface ModelRef {
-  provider: string;
-  model: string;
-  active: boolean;
-}
-```
+If the broker returns no response, Rust persists the incomplete human step and
+marks the run `waiting`. `/resume` prompts again for that same occurrence and
+stores the response; later replay reuses it.
 
-`create` starts an empty session. Repeated `run` calls share that session's
-history. `fork` copies the history and creates a separate session. `model`
-may be a configured alias, `provider/model`, or a unique model name.
+### Map and elevation
 
-The `thinking` run option controls every model request in that turn, including
-requests made after tool results:
+`context.map` defaults to concurrency `4`, enforces a positive limit, and
+restores input order after bounded parallel execution.
 
-| Value | Behavior |
-| --- | --- |
-| omitted or `"default"` | Preserve the provider and model default. |
-| `"off"` | Disable thinking when supported. |
-| `"on"` | Enable thinking when supported. |
-| `"low"` | Request low reasoning effort. |
-| `"medium"` | Request medium reasoning effort. |
-| `"high"` | Request high reasoning effort. |
+`context.elevate` supports positive attempt counts, checks, fallback, and
+`fresh`, `fork`, or `reuse` session context. `reuse` retargets the supplied
+session; `fork` copies it. Elevation-level thinking is scoped to operation
+session runs, and an explicit per-run thinking option overrides it.
 
-Support depends on the selected model. Flowmation passes the requested value
-through without clamping or fallback. Reasoning traces are retained in session
-history when the provider supplies them, but are not returned to workflow code.
+### Process execution
 
-### `context.human`
+`context.exec` supports `cwd`, string-valued `env`, stdin `input`, positive
+`timeoutMs`, positive `maxOutputBytes`, and `allowFailure`. Rust captures
+stdout/stderr and returns command, arguments, output, and exit code. Failed
+commands reject unless `allowFailure` is true.
 
-```ts
-interface WorkflowHumanApi {
-  approve(request: {
-    prompt: string;
-    details?: string;
-  }): Promise<boolean>;
-  choose(request: {
-    prompt: string;
-    choices: HumanChoice[];
-  }): Promise<string>;
-  ask(request: {
-    prompt: string;
-    description?: string;
-  }): Promise<string>;
-}
+Cancellation terminates the child and, on Unix, its process group so
+descendants do not survive. The descendant-termination integration test is
+Unix-only, matching the legacy Windows test exclusion; Windows descendant-tree
+behavior is not covered by this suite.
 
-interface HumanChoice {
-  value: string;
-  label: string;
-  description?: string;
-}
-```
+### Logging
 
-`approve` returns `true` for approval. `choose` returns one of the supplied
-choice values. `ask` returns free-form text. Prompts are saved as run steps;
-resuming a run reuses an already answered prompt.
+`context.log` sends a typed request to Rust. `/workflow-debug on` displays
+foreground callback logs on stderr; `/workflow-debug off` hides them. The
+setting is process-local.
 
-If no human adapter is available, the run becomes `waiting` and can be resumed
-through the CLI.
+## Durable run commands
 
-### `context.checkpoint`
+Foreground execution:
 
-```ts
-checkpoint<TValue extends JsonValue>(
-  key: string,
-  operation: () => Promise<TValue>,
-): Promise<TValue>
-```
+1. verifies source and validates input;
+2. inserts a queued manual run;
+3. marks it running;
+4. executes through the host and Rust callback services;
+5. stores `completed`, `failed`, `waiting`, `cancelled`, or
+   `version-mismatch`.
 
-Runs `operation` once per run and stores its JSON result. A completed step with
-the same key is returned on resume without calling `operation` again. Keys may
-contain letters, numbers, `.`, `_`, and `-`, and must start with a letter or
-number. Reusing a key with a different step kind or input fails.
+`/runs` lists the 20 most recently updated runs for the current project and
+active agent. `/run <id>` inspects one in that scope. `/resume <id>` resumes
+queued, running, waiting, or interrupted records after source verification.
 
-### `context.effect`
+`/cancel <id>` rejects terminal runs and changes a scoped non-terminal record
+to `cancelled`. It does not have an inter-process control channel, so it cannot
+interrupt a host or subprocess currently executing in another CLI/worker
+process.
 
-```ts
-interface WorkflowEffectOptions<TValue extends JsonValue> {
-  idempotencyKey: string;
-  run(context: {
-    readonly idempotencyKey: string;
-    readonly signal: AbortSignal;
-  }): Promise<TValue>;
-}
+## Protocol version 1
 
-effect<TValue extends JsonValue>(
-  key: string,
-  options: WorkflowEffectOptions<TValue>,
-): Promise<TValue>
-```
+The Rust client spawns `node <host-entry>` with piped stdin/stdout/stderr and
+negotiates version `1` using `host.handshake`. Messages are newline-delimited
+JSON-RPC 2.0.
 
-Like a checkpoint, `effect` stores a completed JSON result and reuses it on
-resume. If the process stops while `run` is executing, it may execute again;
-the external system must use `idempotencyKey` to make the action safe to retry.
-
-### `context.exec`
-
-```ts
-interface WorkflowExecOptions {
-  cwd?: string;
-  env?: Record<string, string>;
-  input?: string;
-  timeoutMs?: number;
-  maxOutputBytes?: number;
-  allowFailure?: boolean;
-}
-
-interface WorkflowExecResult {
-  command: string;
-  args: string[];
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
-```
-
-`exec` runs a child process with `projectDir` as the default working
-directory. The default output limit is 5 MiB. A non-zero exit code rejects the
-promise unless `allowFailure` is `true`. `timeoutMs` and `maxOutputBytes` must
-be positive integers. Cancellation stops the process.
-
-### `context.map`
-
-```ts
-interface WorkflowMapOptions<TItem, TResult> {
-  concurrency?: number;
-  run(item: TItem, index: number): Promise<TResult>;
-}
-
-map<TItem, TResult>(
-  items: readonly TItem[],
-  options: WorkflowMapOptions<TItem, TResult>,
-): Promise<TResult[]>
-```
-
-Runs up to `concurrency` callbacks at once. The default is `4`. Results keep
-the input order. A callback error rejects the map; cancellation stops further
-work.
-
-### `context.elevate`
-
-```ts
-type ElevationContext =
-  | { mode: "fresh" }
-  | { mode: "reuse"; session: WorkflowAgentSession }
-  | { mode: "fork"; session: WorkflowAgentSession };
-
-interface ElevationOptions<TValue extends JsonValue, TFallback extends JsonValue = TValue> {
-  model: string;
-  thinking?: WorkflowThinking;
-  attempts: number;
-  context: ElevationContext;
-  operation(attempt: {
-    attempt: number;
-    previousResults: TValue[];
-    session: WorkflowAgentSession;
-  }): Promise<TValue>;
-  check(value: TValue): boolean | CheckDetails | Promise<boolean | CheckDetails>;
-  fallback?(failure: {
-    results: TValue[];
-    checks: CheckDetails[];
-    session: WorkflowAgentSession;
-  }): Promise<TFallback>;
-}
-
-interface CheckDetails {
-  passed: boolean;
-  message?: string;
-  data?: JsonValue;
-}
-```
-
-`thinking` sets the default thinking mode for every agent run made through the
-elevation operation's `session`. A `session.run` call may override it with its
-own `thinking` option. For reused sessions, the elevation default is scoped to
-the elevation and does not affect later calls through the original session.
-
-`attempts` must be a positive integer. The operation runs up to that many
-times. `check` may return a boolean or a `CheckDetails` object; `passed`
-controls success. On success, `elevate` returns the checked value. After all
-attempts fail, it calls `fallback` if supplied; otherwise it rejects.
-
-The session mode controls history: `fresh` creates a new session, `reuse`
-retargets the supplied session to `model`, and `fork` copies the supplied
-session history into a new session using `model`.
-
-### `context.log`
-
-```ts
-log(message: string, data?: JsonValue): Promise<void>
-```
-
-Emits a debug event. It is shown only while `/workflow-debug on` is enabled.
-
-## JSON values
-
-Workflow inputs, outputs, checkpoint values, effect values, human responses,
-and log data must be JSON values:
-
-```ts
-type JsonValue =
-  | string | number | boolean | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
-```
-
-Numbers must be finite. Objects must be plain objects, and circular values are
-rejected.
-
-## Run commands
-
-```text
-/workflows
-/workflow <name> [input]
-/<workflow-name> [input]
-/runs
-/run <id>
-/resume <id>
-/cancel <id>
-/workflow-debug on|off
-```
-
-Runs are stored in `~/.work-agent/runs.sqlite` and scoped to the project
-directory. Workflow files are fingerprinted when a run starts. If the files
-change before resume, the run becomes `version-mismatch` and must be started
-again.
+Rust-to-host requests are `host.handshake`, `workflow.inspect`,
+`workflow.run`, `workflow.cancel`, `callback.invoke`, and `host.shutdown`.
+Host-to-Rust requests are `sdk.checkpoint`, `sdk.effect`, `sdk.exec`,
+`sdk.map`, `sdk.agent.create`, `sdk.agent.fork`, `sdk.agent.run`, `sdk.human`,
+`sdk.elevate`, and `sdk.log`.

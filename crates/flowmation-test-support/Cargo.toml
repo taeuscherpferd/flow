@@ -1,0 +1,17 @@
+[package]
+name = "flowmation-test-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+flowmation-application = { path = "../flowmation-application" }
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true

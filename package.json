@@ -1,33 +1,19 @@
 {
-  "name": "work_coding_agent",
+  "name": "flowmation-workspace",
   "version": "1.0.0",
-  "description": "",
+  "private": true,
   "license": "ISC",
-  "author": "",
-  "type": "module",
-  "imports": {
-    "#src/*": "./dist/*"
-  },
   "engines": {
     "node": ">=24"
   },
-  "main": "index.js",
-  "bin": {
-    "flowmation": "./dist/index.js"
-  },
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsx src/index.ts",
-    "test": "node --import tsx --test src/**/*.test.ts"
-  },
-  "devDependencies": {
-    "@types/node": "^26.1.1",
-    "typescript": "^7.0.2"
-  },
-  "dependencies": {
-    "gray-matter": "^4.0.3",
-    "tsx": "^4.23.1",
-    "yaml": "^2.9.0"
+    "build": "cargo build --workspace && pnpm --dir workflow-host run build",
+    "build:rust": "cargo build --workspace",
+    "build:workflow-host": "pnpm --dir workflow-host run build",
+    "test": "cargo test --workspace --all-features && pnpm --dir workflow-host test",
+    "test:rust": "cargo test --workspace --all-features",
+    "test:workflow-host": "pnpm --dir workflow-host test",
+    "lint": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "format": "cargo fmt --all -- --check"
   }
 }

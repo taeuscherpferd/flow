@@ -1,9 +1,8 @@
 # Configured agents
 
-Configured agents are named, isolated packages. The main agent coordinates
-work, while each specialist owns its prompt, model defaults, tool policy,
-skills, workflows, context, persistent direct conversation, and scheduled
-workflow executions.
+Configured agents are Rust-owned package records with isolated prompts, model
+defaults, tool allowlists, skills, fingerprints, and persistent direct
+conversations.
 
 ## Package layout
 
@@ -15,8 +14,8 @@ Create a package in either location:
 ```
 
 The directory is atomic. If both locations define `finance`, the project
-directory replaces the global directory completely. Files and permissions are
-never merged across packages.
+directory replaces the global directory completely. If that project package
+is invalid, Flowmation skips it instead of falling back to the global package.
 
 ```text
 finance/
@@ -29,14 +28,15 @@ finance/
   skills/
     reconcile-transactions/
       SKILL.md
-  workflows/
-    monthly-close/
-      WORKFLOW.ts
 ```
 
 `AGENT.yaml`, `SOUL.md`, and `AGENTS.md` are required. `CONTEXT.md`,
-`context/`, `skills/`, and `workflows/` are optional. The complete directory is
-SHA-256 fingerprinted in deterministic path order.
+`context/`, and `skills/` are optional.
+
+Rust fingerprints every regular file under the package. The legacy algorithm
+sorts portable relative paths, then hashes each relative path, a NUL byte, the
+file contents, and another NUL byte with SHA-256. Symbolic links and
+non-file/non-directory entries are rejected.
 
 ## Manifest version 1
 
@@ -50,54 +50,75 @@ tools:
   - read_file
   - write_file
   - run_command
+  - load_skill
+  - run_workflow
 ```
 
-`version`, `name`, and `description` are required. The name must match its
-lowercase kebab-case directory. `model` accepts a provider-qualified model, an
-unambiguous name, or an existing alias; omission inherits the main default.
-`thinking` accepts `default`, `off`, `on`, `low`, `medium`, or `high`.
+`version`, `name`, and `description` are required. `version` must be `1`, and
+the name must match its lowercase kebab-case directory. `model` accepts a
+provider-qualified model, an unambiguous bare model name, or an alias; omission
+inherits the configured default model. `thinking` accepts `default`, `off`,
+`on`, `low`, `medium`, or `high`.
 
-`tools` is an allowlist. When omitted it defaults to `read_file` and
-`load_skill`. Direct specialist chat also receives schedule-management tools;
-delegated, workflow, and scheduled sessions do not.
+When `tools` is omitted, it defaults to `read_file` and `load_skill`. The CLI
+registers:
 
-`SOUL.md` defines persona, priorities, and judgment. `AGENTS.md` defines
-operational rules. `CONTEXT.md` is placed in the initial prompt, while files
-under `context/` are listed by path and read only when needed.
+| Tool | Effect and behavior |
+| --- | --- |
+| `read_file` | Read effect; reads text relative to the launch project unless given an absolute path. |
+| `write_file` | Write effect; asks for terminal approval, creates parents, and overwrites the target. |
+| `run_command` | Command effect; asks for terminal approval, uses the platform shell, has a 30-second timeout, and retains at most 500 KB from each output stream. |
+| `load_skill` | Read effect; returns the rendered body of an exact active-agent skill. |
+| `run_workflow` | Self-managed external effect; exposes eligible top-level workflows and honors their `disabled`, `confirm`, or `automatic` policy. |
 
-## Resources
+The manifest format also recognizes delegation and schedule tool names, but
+the CLI does not register those implementations.
 
-Agent-local skills and workflows are discovered under their respective
-directories. Canonical IDs are `<agent>/<resource>`, such as
-`finance/reconcile-transactions` and `finance/monthly-close`.
+`SOUL.md` supplies persona and priorities. `AGENTS.md` supplies operational
+instructions. `CONTEXT.md` is inserted into the system prompt. Files under
+`context/` are listed by absolute path for on-demand access rather than eagerly
+inserted.
 
-Inside direct finance chat, `/reconcile-transactions` uses the finance skill.
-From main, `/finance/reconcile-transactions` loads it. A short name is accepted
-from main only when globally unambiguous. No package inheritance,
-cross-agent resource reference, or directory merge exists in v1.
+## Skills
 
-Agent-local skills must be self-contained. The coordinator can load their
-bodies without loading the specialist's persona or context.
+Agent-local skills are discovered under `skills/<name>/SKILL.md`. The
+frontmatter name must be lowercase kebab-case and match its directory. Metadata
+appears in the system prompt, while the body is loaded only through
+`/<skill-name>` or `load_skill`.
 
-## Conversations and delegation
+The active specialist can load its own skills. Cross-agent skill lookup and
+coordinator short-name resolution are not implemented.
 
-`/agent` lists agents and marks the active identity. `/agent finance` switches
-to finance and changes the prompt to `[finance] >`; `/agent main` returns to
-the coordinator.
+All files in an agent package contribute to its authorization fingerprint.
+The interactive workflow registry still scans only top-level global and
+project `workflows/` directories; it does not discover
+`agents/<name>/workflows/`. The schedule worker can resolve an already
+authorized specialist schedule from the owning package's `workflows/`
+directory.
 
-Each direct conversation is stored in `runs.sqlite` under the launch project
-directory and agent name. `/clear` and `/model` affect only the active
-conversation. Stored transcripts exclude system messages, so Flowmation
-rebuilds the current package prompt on startup while preserving
-user/assistant/tool history. Oversized history is compacted before a model
-call.
+## Conversations
 
-The coordinator's `list_agents` tool discovers specialists.
-`delegate_agent({ agent, task })` creates a fresh isolated specialist session,
-passes only the explicit task and package context, and returns only its final
-result. It does not consume or change either direct-chat history. Specialists
-cannot recursively delegate in v1.
+`/agent` lists the coordinator and valid packages. `/agent finance` persists
+the current conversation before switching, and `/agent main` returns to the
+coordinator.
 
-Specialist workflows use that specialist's prompt, model, thinking default,
-skills, and tool policy. A workflow agent session inherits the specialist's
-active model when `context.agents.create({})` omits `model`.
+Each direct conversation is keyed by canonical launch project and agent name
+in `~/.work-agent/runs.sqlite`. `/clear` and `/model` affect only the active
+conversation.
+
+Rust stores user, assistant, and tool messages but filters out system
+messages. On load it rebuilds the prompt from the current soul, instructions,
+context index, context-file list, agent/skill metadata, workflow metadata, and
+tool allowlist before appending non-system history.
+
+## Workflow sessions and delegation boundary
+
+Workflow callbacks can create an empty agent session, run multiple turns with
+shared history, fork a session by copying its history, and retarget a reused
+session to another model. Per-run tool and thinking options do not become
+sticky. Workflow result presentation uses a fresh, tool-free session and does
+not overwrite the direct conversation.
+
+These sessions use the active agent profile and tool registry. Coordinator
+`list_agents`/`delegate_agent` tools, fresh specialist delegation, and
+recursive-delegation rules are not current user-facing capabilities.

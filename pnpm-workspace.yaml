@@ -1,2 +1,5 @@
+packages:
+  - workflow-host
+
 allowBuilds:
   esbuild: true

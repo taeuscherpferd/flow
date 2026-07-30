@@ -1,59 +1,82 @@
 # Authority and security
 
-Flowmation separates trusted workflow code from model-requested tool calls.
+Flowmation separates model-requested tools from trusted workflow modules.
 
-## Tool effects
+## Model tool effects
 
 Tools declare one of five effect classes:
 
-- `read`: local inspection with no mutation; runs automatically.
+- `read`: local inspection; allowed automatically.
 - `write`: filesystem mutation; requires foreground approval.
 - `command`: process execution; requires foreground approval.
 - `external`: another effectful action; requires foreground approval.
 - `schedule`: schedule creation or mutation; requires foreground approval.
 
 The active agent's allowlist is applied before tools are shown to the model.
-An unlisted tool cannot run. Delegated effects pause foreground delegation and
-use the same approval prompt as direct chat.
+An unlisted or unregistered tool cannot run. Concurrent terminal permission
+prompts are serialized.
 
-The `run_workflow` tool manages permission through each workflow's
-`agentInvocation` policy. `confirm` workflows prompt once, while `automatic`
-workflows use their configured authorization without an additional generic
-tool prompt.
+`run_workflow` is self-managed. `disabled` workflows are unavailable,
+`confirm` workflows prompt with the exact input, and `automatic` workflows do
+not add a workflow-specific prompt. The record and policy are resolved again
+when the call executes.
 
-Scheduled agent sessions have no interactive authority. Read-only calls may
-run, but every effectful model tool call is denied. Schedule-management tools
-are registered only in direct coordinator and specialist conversations.
-Delegated and scheduled specialists cannot recursively delegate.
+The CLI does not currently register delegation or schedule-management model
+tools. The scheduling application service still applies a separate complete
+authorization record.
 
-## Trusted workflows
+## Trusted workflow code
 
-`WORKFLOW.ts` and `WORKFLOW.js` are trusted local code. They can use Node APIs,
-execute commands, and perform effects. Creating or reauthorizing a schedule is
-therefore the approval boundary for unattended workflow execution. The
-confirmation includes:
+`WORKFLOW.ts` and `WORKFLOW.js` are trusted local code. The Node host preserves
+Node APIs and workflow-local imports, so a module can perform actions outside
+Rust tool approval. Review workflow code before running or scheduling it.
 
-- agent and owned workflow;
-- validated JSON input;
+Rust rejects symbolic links in fingerprinted workflow and agent-package
+directories. It verifies the stored SHA-256 fingerprint before new, resumed,
+and scheduled execution. A schedule fingerprint covers the workflow directory
+for `main` and the complete package for a specialist.
+
+Fingerprinting and Node import are separate operations. A local actor can
+modify bytes in the short interval after the final hash and before/during
+module import. This is a time-of-check/time-of-use limitation, not a sandbox
+boundary.
+
+Workflow effects should use `context.effect` and an external idempotency key.
+A crash can occur after an external system accepts an action but before the
+local completion record commits.
+
+## Scheduled authority
+
+The Rust worker uses a non-interactive authorization policy: read-only model
+tools are allowed and effectful model tools are denied. Workflow code itself
+remains trusted.
+
+Schedule creation and reauthorization services include:
+
+- owning agent and workflow;
+- validated input;
 - project working directory;
 - IANA timezone and cron cadence;
-- complete agent-package fingerprint.
+- complete authorization fingerprint.
 
-Changing any specialist package file invalidates its schedules before another
-occurrence executes. Main schedules use the owned workflow fingerprint.
-Reauthorization validates current input and captures the new fingerprint.
-The worker verifies this fingerprint before evaluating the workflow module.
-Symbolic links are rejected inside fingerprinted agent packages and workflow
-directories so linked content cannot change outside the authorization record.
+The current CLI does not expose those creation/reauthorization services, so
+existing records must have been created by a compatible adapter or prior
+version. Fingerprint mismatch invalidates them before normal module evaluation.
 
-Workflow effects should still use `context.effect` with an external
-idempotency key. A crash can occur after an external system accepts an action
-but before the local completion record commits.
+## Cancellation and subprocesses
+
+In-process workflow cancellation calls `workflow.cancel` and cancels Rust
+callbacks. `context.exec` terminates its child and uses a process group on Unix
+to terminate descendants. The descendant test is Unix-only; Windows
+descendant-tree behavior is not covered.
+
+`/cancel` is a durable database transition, not an inter-process signal. It
+cannot stop a workflow host or command currently owned by another CLI or
+worker process.
 
 ## Human input
 
-A scheduled workflow cannot open an interactive prompt. If it calls
-`context.human`, the durable run enters `waiting`, its occurrence remains
-non-terminal, and Flowmation records an unread notification. Resume it with
-`/resume <run-id>` in the foreground. Stored human steps and the schedule
-occurrence update as the run continues.
+Foreground human and permission prompts are serialized. A scheduled workflow
+cannot prompt: an unanswered human callback persists a waiting run,
+occurrence, and unread notification. `/resume` can continue a discoverable
+workflow in a foreground process and reuse completed durable human responses.
