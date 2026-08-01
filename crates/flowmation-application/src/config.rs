@@ -127,6 +127,18 @@ impl ConfigService {
         &self,
         setup: &ModelSetup,
     ) -> Result<PathBuf, ConfigServiceError> {
+        self.save_model(setup, true).await
+    }
+
+    pub async fn add_model(&self, setup: &ModelSetup) -> Result<PathBuf, ConfigServiceError> {
+        self.save_model(setup, false).await
+    }
+
+    async fn save_model(
+        &self,
+        setup: &ModelSetup,
+        set_as_default: bool,
+    ) -> Result<PathBuf, ConfigServiceError> {
         self.ensure_global_scaffold().await?;
         let path = self.global_dir.join("models.json");
         let mut current = read_json_if_exists::<ModelsConfig>(&path)
@@ -148,8 +160,10 @@ impl ConfigService {
             name: setup.model.clone(),
             context_window: setup.context_window,
         });
-        current.default_provider.clone_from(&setup.provider);
-        current.default_model.clone_from(&setup.model);
+        if set_as_default {
+            current.default_provider.clone_from(&setup.provider);
+            current.default_model.clone_from(&setup.model);
+        }
         current.providers.insert(
             setup.provider.clone(),
             ProviderConfig {
@@ -290,6 +304,36 @@ mod tests {
         assert!(config.models.has_configured_default_model());
         assert_eq!(config.models.default_provider, "local");
         assert!(path.ends_with("models.json"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn adds_model_without_changing_the_active_global_model()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let service = ConfigService::new(root.path().join("global"), root.path().join("project"));
+        service
+            .save_model_setup(&ModelSetup {
+                provider: "local".to_owned(),
+                base_url: "http://localhost:11434".to_owned(),
+                model: "qwen3:8b".to_owned(),
+                context_window: 16_384,
+            })
+            .await?;
+
+        service
+            .add_model(&ModelSetup {
+                provider: "openai".to_owned(),
+                base_url: "codex://app-server".to_owned(),
+                model: "gpt-5.6".to_owned(),
+                context_window: 1_050_000,
+            })
+            .await?;
+
+        let config = service.load().await?;
+        assert_eq!(config.models.default_provider, "local");
+        assert_eq!(config.models.default_model, "qwen3:8b");
+        assert_eq!(config.models.providers["openai"].models[0].name, "gpt-5.6");
         Ok(())
     }
 }

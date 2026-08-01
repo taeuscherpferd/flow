@@ -42,6 +42,8 @@ pub const HELP_TEXT: &str = r#"Commands:
   /agent main      Return to the coordinator
   /clear           Clear only the active conversation
   /model [name]    List or switch the active conversation's model
+  /model openai[/<name>]
+                    Add and switch to an OpenAI model through ChatGPT
   /workflows       List workflows owned by the active agent
   /workflow <name> [input]
                     Run an active-agent workflow

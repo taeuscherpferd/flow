@@ -2,7 +2,6 @@ mod durability;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,15 +11,13 @@ use async_trait::async_trait;
 use chrono::Utc;
 use flowmation_application::{
     AgentManager, AuthorizationDecision, AuthorizationPolicy, ConfigService, DurableRunStatus,
-    HumanRequestBroker, ManagedWorkflowAgentRuntime, ModelProvider, PermissionRequest,
-    ScheduleExecution, ScheduleWorker, WorkerExecutionResult, WorkflowAgentRuntime,
-    WorkflowCallbackServices, WorkflowDurability, WorkflowLogSink, WorkflowRegistry,
-    WorkflowRegistryRoot, WorkflowRunner,
+    HumanRequestBroker, ManagedWorkflowAgentRuntime, PermissionRequest, ScheduleExecution,
+    ScheduleWorker, WorkerExecutionResult, WorkflowAgentRuntime, WorkflowCallbackServices,
+    WorkflowDurability, WorkflowLogSink, WorkflowRegistry, WorkflowRegistryRoot, WorkflowRunner,
 };
 use flowmation_domain::agent::PackageSource;
 use flowmation_domain::fingerprint::fingerprint_directory;
 use flowmation_domain::schedule::{ScheduleOccurrence, ScheduleOccurrenceStatus, ScheduleRecord};
-use flowmation_ollama::OllamaProvider;
 use flowmation_sqlite::{SqliteApplicationRepository, SqliteDatabase};
 use flowmation_workflow_host::protocol::HumanCallback;
 use flowmation_workflow_host::{WorkflowHost, WorkflowHostConfig};
@@ -29,6 +26,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
 use self::durability::ScheduledDurability;
+use crate::provider_factory::create_model_providers;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -111,17 +109,7 @@ impl ScheduledWorkflowExecution {
             .load()
             .await
             .map_err(|error| error.to_string())?;
-        let providers = config
-            .models
-            .providers
-            .iter()
-            .map(|(name, provider)| {
-                (
-                    name.clone(),
-                    Arc::new(OllamaProvider::new(&provider.base_url)) as Arc<dyn ModelProvider>,
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
+        let providers = create_model_providers(&config.models);
         let repository = Arc::new(
             SqliteApplicationRepository::open_global_dir(&self.global_dir)
                 .map_err(|error| error.to_string())?,

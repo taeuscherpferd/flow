@@ -2,11 +2,12 @@ mod command;
 mod line_editor;
 mod model_setup;
 mod permission_prompt;
+mod provider_factory;
 mod spinner;
 mod worker;
 mod workflow_commands;
 
-use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,15 +17,17 @@ use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use flowmation_application::scheduling::ScheduleRepository;
 use flowmation_application::{
-    AgentManager, ConfigService, HumanRequestBroker, ManagedWorkflowAgentRuntime, ModelProvider,
+    AgentManager, ConfigService, HumanRequestBroker, ManagedWorkflowAgentRuntime,
     StandardAuthorizationPolicy, WorkflowAgentRuntime, WorkflowCallbackServices,
     WorkflowConfirmation, WorkflowDurability, WorkflowLogSink, WorkflowRegistry,
     WorkflowRegistryRoot, WorkflowRunner, WorkflowToolRuntime,
 };
+use flowmation_codex::{
+    CodexAccountStatus, CodexModel, CodexProvider, OPENAI_SUBSCRIPTION_PROVIDER_NAME,
+};
 use flowmation_domain::agent::PackageSource;
 use flowmation_domain::ids::ScheduleId;
 use flowmation_domain::input_history::{InputHistory, InputHistoryStore};
-use flowmation_ollama::OllamaProvider;
 use flowmation_sqlite::{
     SqliteApplicationRepository, WorkflowPresentation as StoredWorkflowPresentation,
     WorkflowRunDetails, WorkflowRunStatus,
@@ -37,14 +40,16 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::command::{BUILTIN_COMMANDS, HELP_TEXT, ReplCommand, parse_repl_line};
-use crate::model_setup::{ModelSetupIo, ModelSetupResult, ModelSetupService};
+use crate::model_setup::{ModelSetupIo, ModelSetupResult, ModelSetupService, format_openai_model};
 use crate::permission_prompt::{PermissionPrompt, SerializedPermissionBroker};
+use crate::provider_factory::create_model_providers;
 use crate::spinner::Spinner;
 use crate::workflow_commands::WorkflowRunScope;
 
 const READY_TEXT: &str = "Ready. Type a message, or \"/help\" for commands.";
 const WELCOME_TEXT: &str = "Welcome to flowmation. Before we can get started you will need to \
                             setup a provider and a model. Use /model to get started.";
+const OPENAI_MODEL_PREFIX: &str = "openai/";
 
 #[derive(Debug, Parser)]
 #[command(name = "flowmation", version, about)]
@@ -120,17 +125,7 @@ impl Debug for CliWorkflowToolRuntime {
 
 impl Runtime {
     async fn create(config: flowmation_domain::config::ResolvedConfig) -> Result<Self, String> {
-        let providers = config
-            .models
-            .providers
-            .iter()
-            .map(|(name, provider)| {
-                (
-                    name.clone(),
-                    Arc::new(OllamaProvider::new(&provider.base_url)) as Arc<dyn ModelProvider>,
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
+        let providers = create_model_providers(&config.models);
         let repository = Arc::new(
             SqliteApplicationRepository::open_global_dir(&config.global_dir)
                 .map_err(|error| error.to_string())?,
@@ -413,21 +408,74 @@ async fn run_repl() -> Result<(), String> {
                 }
             }
             ReplCommand::Model(requested) => {
-                if let Some(active) = runtime.as_mut() {
+                let requested_openai_model = requested
+                    .as_deref()
+                    .and_then(|value| value.strip_prefix(OPENAI_MODEL_PREFIX));
+                let configure_openai = requested.as_deref()
+                    == Some(OPENAI_SUBSCRIPTION_PROVIDER_NAME)
+                    || requested_openai_model.is_some_and(|model| {
+                        config
+                            .models
+                            .resolve_model(&format!("{OPENAI_MODEL_PREFIX}{model}"))
+                            .is_err()
+                    });
+                if configure_openai {
+                    let active_agent = if let Some(active) = runtime.as_ref() {
+                        Some(active.manager.lock().await.active_name().to_owned())
+                    } else {
+                        None
+                    };
+                    if let ModelSetupResult::Completed {
+                        provider, model, ..
+                    } = setup_openai_model(&config_service, requested_openai_model).await?
+                    {
+                        config = config_service
+                            .load()
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        let configured_runtime = Runtime::create(config.clone()).await?;
+                        let reference = format!("{provider}/{model}");
+                        let mut manager = configured_runtime.manager.lock().await;
+                        if let Some(active_agent) = active_agent.as_deref() {
+                            manager
+                                .switch_agent(active_agent)
+                                .map_err(|error| error.to_string())?;
+                        }
+                        manager
+                            .set_model(&reference)
+                            .map_err(|error| error.to_string())?;
+                        drop(manager);
+                        runtime = Some(configured_runtime);
+                        println!("Added and switched to {reference}.");
+                    }
+                } else if let Some(active) = runtime.as_mut() {
                     let mut manager = active.manager.lock().await;
                     if let Some(requested) = requested {
                         match manager.set_model(&requested) {
-                            Ok(true) => println!("Switched model to \"{requested}\"."),
-                            Ok(false) => println!("Already using \"{requested}\"."),
+                            Ok(true) => println!("Switched to {requested}."),
+                            Ok(false) => println!("Already using {requested}."),
                             Err(error) => println!("{error}"),
                         }
                     } else {
                         let (provider, model) = manager.current_model();
-                        println!("Current model: {provider}/{model}");
-                        println!("Available:");
-                        for reference in config.models.list_model_references() {
-                            println!("  {}/{}", reference.provider, reference.model);
+                        let current = format!("{provider}/{model}");
+                        let references = config.models.list_model_references();
+                        let configured_openai = references
+                            .iter()
+                            .filter(|reference| {
+                                reference.provider == OPENAI_SUBSCRIPTION_PROVIDER_NAME
+                            })
+                            .map(|reference| reference.model.clone())
+                            .collect::<HashSet<_>>();
+                        println!("Configured models:");
+                        for reference in references {
+                            let name = format!("{}/{}", reference.provider, reference.model);
+                            let current_marker = if name == current { " (current)" } else { "" };
+                            println!("  {name}{current_marker}");
                         }
+                        drop(manager);
+                        println!("Use /model <provider/model> to switch.");
+                        print_openai_models(&configured_openai).await;
                     }
                 } else if setup_first_model(&config_service).await? {
                     config = config_service
@@ -855,6 +903,67 @@ async fn setup_first_model(service: &ConfigService) -> Result<bool, String> {
     }
 }
 
+async fn setup_openai_model(
+    service: &ConfigService,
+    requested_model: Option<&str>,
+) -> Result<ModelSetupResult, String> {
+    ModelSetupService::new(service, &TerminalSetupIo)
+        .run_openai(requested_model)
+        .await
+}
+
+async fn print_openai_models(configured_openai: &HashSet<String>) {
+    let spinner = Spinner::start("Checking OpenAI models");
+    let provider = CodexProvider::default();
+    let catalog = provider.model_catalog().await;
+    spinner.stop().await;
+    let (account, models) = match catalog {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            println!("OpenAI models unavailable: {error}");
+            return;
+        }
+    };
+    if !account.uses_chatgpt_subscription() {
+        if let Some(account_type) = account.account_type.as_deref() {
+            println!(
+                "OpenAI models require ChatGPT sign-in; Codex currently uses \"{account_type}\". \
+Run /model openai to switch."
+            );
+        } else {
+            println!("OpenAI models require ChatGPT sign-in. Run /model openai to sign in.");
+        }
+        return;
+    }
+    let models = models
+        .into_iter()
+        .filter(|model| !configured_openai.contains(&model.id))
+        .collect::<Vec<_>>();
+    if models.is_empty() {
+        println!("No additional OpenAI models are available.");
+        return;
+    }
+    println!("OpenAI models available to add:");
+    for model in models {
+        println!("{}", format_openai_model(&model));
+    }
+    println!("Use /model openai/<name> to add and switch.");
+}
+
+async fn read_codex_account(provider: &CodexProvider) -> Result<CodexAccountStatus, String> {
+    let spinner = Spinner::start("Checking ChatGPT sign-in");
+    let result = provider.account_status().await;
+    spinner.stop().await;
+    result.map_err(|error| error.to_string())
+}
+
+async fn read_codex_models(provider: &CodexProvider) -> Result<Vec<CodexModel>, String> {
+    let spinner = Spinner::start("Loading OpenAI models");
+    let result = provider.list_models().await;
+    spinner.stop().await;
+    result.map_err(|error| error.to_string())
+}
+
 fn split_command(command: &str) -> (&str, &str) {
     command
         .split_once(char::is_whitespace)
@@ -887,6 +996,41 @@ struct TerminalSetupIo;
 impl ModelSetupIo for TerminalSetupIo {
     async fn prompt(&self, prompt: &str) -> Result<Option<String>, String> {
         read_line(prompt).await
+    }
+
+    async fn authenticate_openai(&self) -> Result<(), String> {
+        let provider = CodexProvider::default();
+        let account = read_codex_account(&provider).await?;
+        if account.uses_chatgpt_subscription() {
+            return Ok(());
+        }
+        if let Some(account_type) = account.account_type.as_deref() {
+            println!(
+                "Codex currently uses \"{account_type}\" authentication. OpenAI models in \
+Flowmation use ChatGPT sign-in."
+            );
+            println!("Completing this sign-in will replace Codex's current authentication.");
+        } else {
+            println!("Sign in to ChatGPT to use OpenAI models.");
+        }
+        provider
+            .login_with_device_code(|login| {
+                println!("Open {}", login.verification_url);
+                println!("Enter the one-time code: {}", login.user_code);
+                println!("Waiting for Codex sign-in to complete...");
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        let account = read_codex_account(&provider).await?;
+        if account.uses_chatgpt_subscription() {
+            Ok(())
+        } else {
+            Err("Codex sign-in completed without ChatGPT subscription authentication.".to_owned())
+        }
+    }
+
+    async fn discover_openai_models(&self) -> Result<Vec<CodexModel>, String> {
+        read_codex_models(&CodexProvider::default()).await
     }
 
     fn output(&self, message: &str) {

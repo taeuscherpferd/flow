@@ -3,6 +3,7 @@ members = [
   "crates/flowmation-application",
   "crates/flowmation-cli",
   "crates/flowmation-domain",
+  "crates/flowmation-codex",
   "crates/flowmation-ollama",
   "crates/flowmation-sqlite",
   "crates/flowmation-test-support",

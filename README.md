@@ -11,7 +11,8 @@ including their Node API and workflow-local dependency access.
 - Rust 1.96 or newer
 - Node.js 24 or newer and pnpm for the workflow compatibility host. The
   `node` executable must be available on `PATH`.
-- An Ollama-compatible provider
+- An Ollama-compatible provider, or the official OpenAI Codex CLI for ChatGPT
+  subscription access
 
 The current CLI initializes workflow discovery before its first normal agent
 turn so it can register `run_workflow`. Consequently, interactive chat as well
@@ -95,6 +96,7 @@ verbatim paths remain compatible with the Node module loader.
 | `flowmation-application` | Provider/tool interfaces, authorization, agents, registries, workflow callbacks and durable execution, scheduling services, and UI-neutral events/cancellation. |
 | `flowmation-sqlite` | `runs.sqlite` repositories, ordered migrations, application adapters, schedule leases/occurrences/notifications, and legacy compatibility. |
 | `flowmation-ollama` | Ollama-compatible HTTP provider adapter. |
+| `flowmation-codex` | OpenAI subscription adapter using the official Codex app server and its cached login. |
 | `flowmation-workflow-host` | Rust child-process client and typed, versioned bidirectional JSON-RPC protocol. |
 | `flowmation-cli` | Terminal adapter, first-model setup, raw-mode line editor, run management, and the internal schedule worker. |
 | `flowmation-test-support` | Reusable fake providers, brokers, clocks, repositories, and event collectors. |
@@ -108,7 +110,54 @@ domain and application services.
 
 On first launch Flowmation creates the global scaffold under
 `~/.work-agent/`. If no model is configured, `/model` starts an interactive
-Ollama-compatible provider setup.
+provider setup.
+
+### OpenAI through a ChatGPT subscription
+
+Run `/model` to see configured models and any additional OpenAI models available
+to the current ChatGPT subscription authenticated through Codex.
+If Codex is not signed in, the listing points to `/model openai`, which starts
+the device-code flow and then shows the live model catalog:
+
+```text
+OpenAI models require ChatGPT sign-in. Run /model openai to sign in.
+Open https://auth.openai.com/codex/device
+Enter the one-time code: ABCD-1234
+```
+
+Open the address printed by Codex, sign in to ChatGPT, and enter the one-time
+code. Device-code login may first need to be enabled in ChatGPT Security
+Settings or by a workspace administrator.
+
+Flowmation does not implement OpenAI OAuth, read `~/.codex/auth.json`, or store
+ChatGPT tokens. It starts the official Codex app server, which owns login,
+credential storage, refresh, model access, and subscription usage limits.
+Install and authenticate Codex before setup if preferred:
+
+```sh
+npm install -g @openai/codex
+codex login --device-auth
+codex login status
+```
+
+If `codex` is not on `PATH`, set `FLOWMATION_CODEX_BIN` to the executable or
+launcher path. Windows pnpm `codex.ps1` launchers are supported directly.
+Flowmation gets the picker-visible models and the recommended default from the
+Codex app server instead of maintaining a hard-coded OpenAI model list. Run
+`/model openai/<name>` to add a model shown by `/model` and switch the active
+conversation to it immediately. OpenAI context settings are managed
+automatically; the setup flow does not ask for a context-window value.
+
+This is distinct from OpenAI Platform API access. The `openai` provider rejects
+API-key and non-OpenAI Codex authentication so it cannot silently switch to
+usage-based billing. A separate configurable API provider is planned in
+[docs/openai-api-provider-todo.md](docs/openai-api-provider-todo.md).
+
+> **Security warning:** The Codex app server remains an agent runtime and may
+> invoke Codex built-in or configured tools that Flowmation did not advertise.
+> Flowmation requests a read-only sandbox and never requests approval escalation,
+> but it cannot currently enforce a Codex-side tool allowlist. Use this provider
+> only when the local Codex configuration and execution environment are trusted.
 
 Configuration is loaded from:
 
@@ -192,6 +241,7 @@ The Rust REPL implements:
 - `/agent [name]`
 - `/clear`
 - `/model [name]`
+- `/model openai` and `/model openai/<name>`
 - `/workflows`
 - `/workflow <name> [input]` and `/<workflow-name> [input]`
 - `/<skill-name> [message]`

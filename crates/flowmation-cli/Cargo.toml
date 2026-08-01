@@ -15,6 +15,7 @@ chrono.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 flowmation-application = { path = "../flowmation-application" }
+flowmation-codex = { path = "../flowmation-codex" }
 flowmation-domain = { path = "../flowmation-domain" }
 flowmation-ollama = { path = "../flowmation-ollama" }
 flowmation-sqlite = { path = "../flowmation-sqlite" }

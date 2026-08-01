@@ -474,12 +474,28 @@ dependencies = [
  "clap",
  "crossterm",
  "flowmation-application",
+ "flowmation-codex",
  "flowmation-domain",
  "flowmation-ollama",
  "flowmation-sqlite",
  "flowmation-workflow-host",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "flowmation-codex"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "flowmation-application",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
  "tokio",
  "tokio-util",
  "uuid",

@@ -1,7 +1,8 @@
 # Workflow agent thinking controls
 
 Status: implemented
-Scope: workflow-created agent sessions and the Ollama-compatible provider
+Scope: workflow-created agent sessions, Ollama-compatible providers, and the
+OpenAI ChatGPT-subscription provider
 
 ## Public SDK
 
@@ -47,6 +48,20 @@ including requests after tool results, and does not become sticky.
 Flowmation does not infer model capability, clamp a level, or retry with a
 different value. Provider rejection follows the normal model error path.
 
+## Codex app-server mapping
+
+| SDK value | Codex `turn/start.effort` |
+| --- | --- |
+| omitted or `"default"` | field omitted |
+| `"off"` | `"none"` |
+| `"on"` | `"medium"` |
+| `"low"` | `"low"` |
+| `"medium"` | `"medium"` |
+| `"high"` | `"high"` |
+
+The Codex adapter creates an ephemeral app-server thread for each provider
+request and forwards the selected effort on every tool-loop iteration.
+
 ## Rust ownership and history
 
 The Node host carries `WorkflowThinking` over the versioned callback protocol.
@@ -67,6 +82,8 @@ and the elevation default is removed when the operation finishes.
 
 - `flowmation-ollama/src/lib.rs::maps_thinking_modes_to_top_level_think_field`
 - `flowmation-ollama/src/lib.rs::retains_response_and_historical_thinking`
+- `flowmation-codex/src/app_server.rs::maps_provider_thinking_modes_to_codex_effort`
+- `flowmation-codex/src/app_server.rs::starts_disposable_threads`
 - `flowmation-application/src/agent.rs::thinking_applies_to_every_request_in_tool_loop`
 - `flowmation-application/src/agent.rs::tool_free_history_retains_thinking_and_strips_tool_calls`
 - `flowmation-application/src/agent.rs::session_thinking_override_is_not_sticky`
