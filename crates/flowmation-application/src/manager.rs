@@ -820,7 +820,9 @@ mod tests {
 
     use async_trait::async_trait;
     use flowmation_domain::chat::JsonSchema;
-    use flowmation_domain::config::{ModelConfig, ModelsConfig, ProviderConfig, ResolvedConfig};
+    use flowmation_domain::config::{
+        ModelConfig, ModelsConfig, ProviderConfig, ProviderKind, ResolvedConfig,
+    };
     use serde_json::{Map, Value, json};
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
@@ -1208,7 +1210,9 @@ mod tests {
             providers: BTreeMap::from([(
                 "local".to_owned(),
                 ProviderConfig {
+                    kind: ProviderKind::Ollama,
                     base_url: "http://localhost:11434".to_owned(),
+                    token_source: None,
                     models: vec![ModelConfig {
                         name: "default".to_owned(),
                         context_window: 8_192,
@@ -1226,7 +1230,9 @@ mod tests {
             providers: BTreeMap::from([(
                 "local".to_owned(),
                 ProviderConfig {
+                    kind: ProviderKind::Ollama,
                     base_url: "http://localhost:11434".to_owned(),
+                    token_source: None,
                     models: vec![
                         ModelConfig {
                             name: "default".to_owned(),
@@ -1254,7 +1260,9 @@ mod tests {
                 (
                     "local".to_owned(),
                     ProviderConfig {
+                        kind: ProviderKind::Ollama,
                         base_url: "http://localhost:11434".to_owned(),
+                        token_source: None,
                         models: vec![ModelConfig {
                             name: "shared".to_owned(),
                             context_window: 8_192,
@@ -1264,7 +1272,9 @@ mod tests {
                 (
                     "remote".to_owned(),
                     ProviderConfig {
+                        kind: ProviderKind::Ollama,
                         base_url: "http://localhost:11435".to_owned(),
+                        token_source: None,
                         models: vec![ModelConfig {
                             name: "reviewer".to_owned(),
                             context_window: 16_384,

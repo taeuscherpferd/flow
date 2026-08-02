@@ -53,7 +53,9 @@ interface CommonJsModuleConstructor {
   _resolveFilename: CommonJsResolveFilename;
 }
 
-registerTypeScript();
+const typeScriptRegistration = registerTypeScript({
+  namespace: "flowmation-workflow",
+});
 const commonJsModule = Module as typeof Module & CommonJsModuleConstructor;
 const nextCommonJsResolve = commonJsModule._resolveFilename;
 // TSX routes CommonJS-shaped TypeScript through this resolver instead of registerHooks.
@@ -103,7 +105,10 @@ export async function loadWorkflow(
 
   await ensureWorkflowSdkPath(entryPath);
   const entryUrl = pathToFileURL(entryPath).href;
-  const imported = import(entryUrl) as Promise<WorkflowModule>;
+  const imported = typeScriptRegistration.import(
+    entryUrl,
+    import.meta.url,
+  ) as Promise<WorkflowModule>;
   const workflowModule = await imported;
   const exported = workflowModule.default;
   let definition: WorkflowDefinition<JsonValue, JsonValue> | undefined;

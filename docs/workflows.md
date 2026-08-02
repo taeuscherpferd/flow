@@ -18,8 +18,10 @@ pnpm --dir workflow-host run build
 pnpm --dir workflow-host test
 ```
 
-The Rust CLI uses `workflow-host/dist/index.js` from the checkout by default.
-Set an absolute path when packaging the executable separately:
+Cargo builds the host and stages its production package beside the CLI at
+`target/<profile>/workflow-host/`. Release executables also contain an embedded
+copy that is extracted under `~/.work-agent/runtime/` when no sibling package
+is present. Set an absolute path only for development or custom packaging:
 
 ```sh
 FLOWMATION_WORKFLOW_HOST=/absolute/path/to/workflow-host/dist/index.js flowmation

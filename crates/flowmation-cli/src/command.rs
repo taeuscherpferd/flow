@@ -44,6 +44,8 @@ pub const HELP_TEXT: &str = r#"Commands:
   /model [name]    List or switch the active conversation's model
   /model openai[/<name>]
                     Add and switch to an OpenAI model through ChatGPT
+  /model openai-api
+                    Configure an OpenAI-compatible API provider and model
   /workflows       List workflows owned by the active agent
   /workflow <name> [input]
                     Run an active-agent workflow

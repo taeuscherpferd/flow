@@ -1,5 +1,5 @@
 [package]
-name = "flowmation-ollama"
+name = "flowmation-openai-compatible"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,15 +8,16 @@ rust-version.workspace = true
 [dependencies]
 async-trait.workspace = true
 flowmation-application = { path = "../flowmation-application" }
+flowmation-domain = { path = "../flowmation-domain" }
 flowmation-http = { path = "../flowmation-http" }
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+thiserror.workspace = true
 tokio-util.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
 http.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

@@ -11,8 +11,8 @@ including their Node API and workflow-local dependency access.
 - Rust 1.96 or newer
 - Node.js 24 or newer and pnpm for the workflow compatibility host. The
   `node` executable must be available on `PATH`.
-- An Ollama-compatible provider, or the official OpenAI Codex CLI for ChatGPT
-  subscription access
+- An Ollama-compatible provider, an OpenAI-compatible Chat Completions API, or
+  the official OpenAI Codex CLI for ChatGPT subscription access
 
 The current CLI initializes workflow discovery before its first normal agent
 turn so it can register `run_workflow`. Consequently, interactive chat as well
@@ -33,8 +33,12 @@ The root build runs:
 
 ```sh
 cargo build --workspace
-pnpm --dir workflow-host run build
 ```
+
+The CLI crate's Cargo build script compiles the workflow host first and stages
+it with its production Node dependencies beside the executable at
+`target/debug/workflow-host/`. Release builds also embed that package in the
+executable as a fallback.
 
 Run the Rust and workflow-host suites:
 
@@ -50,10 +54,9 @@ pnpm run test:rust
 pnpm --dir workflow-host test
 ```
 
-When invoking Cargo directly, build the workflow host first:
+Cargo also handles the workflow-host build when invoked directly:
 
 ```sh
-pnpm --dir workflow-host run build
 cargo test --workspace --all-features
 ```
 
@@ -70,23 +73,34 @@ Run the CLI from the checkout:
 cargo run -p flowmation-cli
 ```
 
-Install the Rust executable:
+Build the release distribution:
+
+```sh
+pnpm run build:release
+```
+
+Install a release executable with the embedded workflow host from the checkout:
 
 ```sh
 cargo install --path crates/flowmation-cli
 ```
 
-`cargo install` does not install the Node workflow host. An installed
-executable must be pointed at a built host:
+The build stages the production workflow host in `target/release/workflow-host/`
+for directory-based packages and embeds the same package in the release
+executable. A release binary first uses a sibling host when present; otherwise,
+it extracts its embedded host under `~/.work-agent/runtime/`. It never depends
+on a source path from the build machine.
+
+An explicit host override remains available for development and custom
+packaging:
 
 ```sh
 FLOWMATION_WORKFLOW_HOST=/absolute/path/to/workflow-host/dist/index.js flowmation
 ```
 
-Without that variable, a binary built in this checkout uses
-`workflow-host/dist/index.js` relative to the crate source path embedded at
-compile time. Host paths are simplified before being passed to Node so Windows
-verbatim paths remain compatible with the Node module loader.
+Debug binaries fall back to the checkout's `workflow-host/dist/index.js` when a
+staged sibling is unavailable. Host paths are simplified before being passed to
+Node so Windows verbatim paths remain compatible with the Node module loader.
 
 ## Workspace architecture
 
@@ -95,7 +109,9 @@ verbatim paths remain compatible with the Node module loader.
 | `flowmation-domain` | Compatibility-sensitive IDs and records, state enums, model configuration, schema validation, five-field cron behavior, fingerprints, and input history. |
 | `flowmation-application` | Provider/tool interfaces, authorization, agents, registries, workflow callbacks and durable execution, scheduling services, and UI-neutral events/cancellation. |
 | `flowmation-sqlite` | `runs.sqlite` repositories, ordered migrations, application adapters, schedule leases/occurrences/notifications, and legacy compatibility. |
+| `flowmation-http` | Shared cancellable JSON HTTP transport used by provider adapters. |
 | `flowmation-ollama` | Ollama-compatible HTTP provider adapter. |
+| `flowmation-openai-compatible` | OpenAI-compatible Chat Completions adapter with environment-backed bearer authentication. |
 | `flowmation-codex` | OpenAI subscription adapter using the official Codex app server and its cached login. |
 | `flowmation-workflow-host` | Rust child-process client and typed, versioned bidirectional JSON-RPC protocol. |
 | `flowmation-cli` | Terminal adapter, first-model setup, raw-mode line editor, run management, and the internal schedule worker. |
@@ -110,7 +126,11 @@ domain and application services.
 
 On first launch Flowmation creates the global scaffold under
 `~/.work-agent/`. If no model is configured, `/model` starts an interactive
-provider setup.
+provider setup with three choices:
+
+- `ollama` for local Ollama-compatible models;
+- `openai` for OpenAI models covered by a ChatGPT subscription through Codex;
+- `openai-api` for OpenAI Platform or another OpenAI-compatible API endpoint.
 
 ### OpenAI through a ChatGPT subscription
 
@@ -150,14 +170,43 @@ automatically; the setup flow does not ask for a context-window value.
 
 This is distinct from OpenAI Platform API access. The `openai` provider rejects
 API-key and non-OpenAI Codex authentication so it cannot silently switch to
-usage-based billing. A separate configurable API provider is planned in
-[docs/openai-api-provider-todo.md](docs/openai-api-provider-todo.md).
+usage-based billing.
 
 > **Security warning:** The Codex app server remains an agent runtime and may
 > invoke Codex built-in or configured tools that Flowmation did not advertise.
 > Flowmation requests a read-only sandbox and never requests approval escalation,
 > but it cannot currently enforce a Codex-side tool allowlist. Use this provider
 > only when the local Codex configuration and execution environment are trusted.
+
+### OpenAI-compatible APIs
+
+Run `/model openai-api` to configure OpenAI Platform or a service exposing the
+[OpenAI Chat Completions schema](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+The wizard asks for a provider name, base URL, model, context window, and the
+name of an environment variable containing the API key. For example:
+
+```sh
+export OPENAI_API_KEY="your-key"
+```
+
+The default base URL is `https://api.openai.com/v1` and the default credential
+source is `OPENAI_API_KEY`. Enter `none` at the credential prompt for an
+unauthenticated compatible endpoint such as a locally hosted server. API keys
+are read when a request runs; only the environment-variable name is stored in
+`models.json`. Interactive conversations and scheduled workflows use the same
+provider factory and credential resolution.
+
+Credential sources are accepted only in the global `~/.work-agent/models.json`
+file. A project may select a provider defined globally or define an
+unauthenticated provider, but project model configuration cannot name an
+environment variable to forward to an endpoint.
+
+This provider uses metered API billing and never reads or changes the Codex or
+ChatGPT login. It currently targets the broadly supported Chat Completions wire
+format so it can also work with compatible services such as OpenRouter, Groq,
+Together, and vLLM. Endpoint-specific headers and the Responses API are not yet
+configurable. See [docs/openai-api-provider.md](docs/openai-api-provider.md) for
+the configuration contract and current limitations.
 
 Configuration is loaded from:
 
@@ -242,6 +291,7 @@ The Rust REPL implements:
 - `/clear`
 - `/model [name]`
 - `/model openai` and `/model openai/<name>`
+- `/model openai-api`
 - `/workflows`
 - `/workflow <name> [input]` and `/<workflow-name> [input]`
 - `/<skill-name> [message]`

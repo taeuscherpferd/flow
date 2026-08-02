@@ -6,10 +6,11 @@ mod provider_factory;
 mod spinner;
 mod worker;
 mod workflow_commands;
+mod workflow_host_entry;
 
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -50,6 +51,7 @@ const READY_TEXT: &str = "Ready. Type a message, or \"/help\" for commands.";
 const WELCOME_TEXT: &str = "Welcome to flowmation. Before we can get started you will need to \
                             setup a provider and a model. Use /model to get started.";
 const OPENAI_MODEL_PREFIX: &str = "openai/";
+const OPENAI_COMPATIBLE_SETUP_NAME: &str = "openai-api";
 
 #[derive(Debug, Parser)]
 #[command(name = "flowmation", version, about)]
@@ -175,7 +177,7 @@ impl Runtime {
             );
             let host = Arc::new(
                 WorkflowHost::spawn(
-                    WorkflowHostConfig::new(workflow_host_entry()),
+                    WorkflowHostConfig::new(workflow_host_entry::entry_path()?),
                     Arc::new(callbacks.clone()),
                 )
                 .await
@@ -419,7 +421,14 @@ async fn run_repl() -> Result<(), String> {
                             .resolve_model(&format!("{OPENAI_MODEL_PREFIX}{model}"))
                             .is_err()
                     });
-                if configure_openai {
+                let setup_result = if configure_openai {
+                    Some(setup_openai_model(&config_service, requested_openai_model).await?)
+                } else if requested.as_deref() == Some(OPENAI_COMPATIBLE_SETUP_NAME) {
+                    Some(setup_openai_compatible_model(&config_service).await?)
+                } else {
+                    None
+                };
+                if let Some(setup_result) = setup_result {
                     let active_agent = if let Some(active) = runtime.as_ref() {
                         Some(active.manager.lock().await.active_name().to_owned())
                     } else {
@@ -427,7 +436,7 @@ async fn run_repl() -> Result<(), String> {
                     };
                     if let ModelSetupResult::Completed {
                         provider, model, ..
-                    } = setup_openai_model(&config_service, requested_openai_model).await?
+                    } = setup_result
                     {
                         config = config_service
                             .load()
@@ -912,6 +921,14 @@ async fn setup_openai_model(
         .await
 }
 
+async fn setup_openai_compatible_model(
+    service: &ConfigService,
+) -> Result<ModelSetupResult, String> {
+    ModelSetupService::new(service, &TerminalSetupIo)
+        .run_openai_compatible()
+        .await
+}
+
 async fn print_openai_models(configured_openai: &HashSet<String>) {
     let spinner = Spinner::start("Checking OpenAI models");
     let provider = CodexProvider::default();
@@ -1121,13 +1138,6 @@ impl WorkflowLogSink for TerminalLogSink {
             eprintln!("[workflow:{run_id}] {message}");
         }
     }
-}
-
-fn workflow_host_entry() -> PathBuf {
-    std::env::var_os("FLOWMATION_WORKFLOW_HOST").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../workflow-host/dist/index.js"),
-        PathBuf::from,
-    )
 }
 
 fn host_error(error: WorkflowHostError) -> String {

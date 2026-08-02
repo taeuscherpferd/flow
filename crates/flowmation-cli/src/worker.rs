@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 use self::durability::ScheduledDurability;
 use crate::provider_factory::create_model_providers;
+use crate::workflow_host_entry;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -147,7 +148,7 @@ impl ScheduledWorkflowExecution {
         );
         let host = Arc::new(
             WorkflowHost::spawn(
-                WorkflowHostConfig::new(workflow_host_entry()),
+                WorkflowHostConfig::new(workflow_host_entry::entry_path()?),
                 Arc::new(callbacks.clone()),
             )
             .await
@@ -345,11 +346,4 @@ impl WorkflowLogSink for WorkerLogSink {
             eprintln!("[{run_id}] {message}");
         }
     }
-}
-
-fn workflow_host_entry() -> PathBuf {
-    std::env::var_os("FLOWMATION_WORKFLOW_HOST").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../workflow-host/dist/index.js"),
-        PathBuf::from,
-    )
 }

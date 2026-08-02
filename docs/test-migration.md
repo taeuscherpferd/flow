@@ -32,7 +32,7 @@ Windows; the Rust suite does not provide Windows descendant-tree coverage.
 | `ModelSetupService` — cancels setup when input closes | **Mapped** | `flowmation-cli/src/model_setup.rs::cancels_when_input_closes` |
 | `ConfigService` — loads the first-run scaffold without requiring a model | **Mapped** | `flowmation-application/src/config.rs::loads_first_run_scaffold_without_a_model` |
 | `ConfigService` — saves a model setup as the active global model | **Mapped** | `flowmation-application/src/config.rs::saves_model_setup_as_active_global_model` |
-| `ConfigService` — merges project model aliases and validates their targets | **Mapped** | `flowmation-domain/tests/config_legacy.rs::merges_project_model_aliases_and_validates_targets` |
+| `ConfigService` — merges project model aliases and validates their targets | **Mapped** | `flowmation-domain/tests/config.rs::merges_project_model_aliases_and_validates_targets` |
 
 ## Input history and CLI interaction
 

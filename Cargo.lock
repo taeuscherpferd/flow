@@ -477,6 +477,7 @@ dependencies = [
  "flowmation-codex",
  "flowmation-domain",
  "flowmation-ollama",
+ "flowmation-openai-compatible",
  "flowmation-sqlite",
  "flowmation-workflow-host",
  "serde_json",
@@ -518,18 +519,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "flowmation-http"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "http",
+ "reqwest",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "flowmation-ollama"
 version = "1.0.0"
 dependencies = [
  "async-trait",
  "flowmation-application",
- "reqwest",
+ "flowmation-http",
+ "http",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "flowmation-openai-compatible"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "flowmation-application",
+ "flowmation-domain",
+ "flowmation-http",
+ "http",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
  "tokio-util",
- "uuid",
 ]
 
 [[package]]

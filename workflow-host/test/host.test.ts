@@ -40,7 +40,7 @@ class HostHarness {
   constructor() {
     this.child = spawn(
       process.execPath,
-      ["--import", "tsx", path.resolve("src/index.ts")],
+      [path.resolve("dist/index.js")],
       { cwd: path.resolve("."), stdio: ["pipe", "pipe", "pipe"] },
     );
     const lines = createInterface({
@@ -299,7 +299,7 @@ test("loads TypeScript through the virtual SDK and refreshes the editor SDK path
       : path.resolve(workflowsDir, sdkReference);
     assert.equal(
       await realpath(resolvedSdkPath),
-      await realpath(path.resolve("src/sdk.ts")),
+      await realpath(path.resolve("dist/sdk.d.ts")),
     );
     assert.equal(
       generated.compilerOptions.noUncheckedIndexedAccess,

@@ -531,7 +531,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{AgentPackageRegistry, build_system_prompt};
-    use flowmation_domain::config::{ModelConfig, ModelsConfig, ProviderConfig};
+    use flowmation_domain::config::{ModelConfig, ModelsConfig, ProviderConfig, ProviderKind};
 
     #[tokio::test]
     async fn project_agent_packages_replace_global_packages_atomically()
@@ -671,7 +671,9 @@ mod tests {
             providers: BTreeMap::from([(
                 "local".to_owned(),
                 ProviderConfig {
+                    kind: ProviderKind::Ollama,
                     base_url: "http://localhost:11434".to_owned(),
+                    token_source: None,
                     models: vec![
                         ModelConfig {
                             name: "default".to_owned(),

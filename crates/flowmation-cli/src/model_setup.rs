@@ -3,12 +3,24 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use flowmation_application::{ConfigService, ModelSetup};
 use flowmation_codex::{CodexModel, OPENAI_SUBSCRIPTION_PROVIDER_NAME};
+use flowmation_domain::config::{CredentialSource, ProviderKind};
 
 const DEFAULT_PROVIDER: &str = "ollama";
 const DEFAULT_BASE_URL: &str = "http://localhost:11434";
 const DEFAULT_CONTEXT_WINDOW: u64 = 8_192;
 const DEFAULT_OPENAI_CONTEXT_WINDOW: u64 = 1_050_000;
 const OPENAI_APP_SERVER_URL: &str = "codex://app-server";
+const DEFAULT_API_PROVIDER: &str = "openai-api";
+const DEFAULT_API_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_API_KEY_ENVIRONMENT: &str = "OPENAI_API_KEY";
+const DEFAULT_API_CONTEXT_WINDOW: u64 = 128_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SetupProvider {
+    Ollama,
+    OpenAiSubscription,
+    OpenAiCompatible,
+}
 
 #[must_use]
 pub fn format_openai_model(model: &CodexModel) -> String {
@@ -72,21 +84,46 @@ impl<'a> ModelSetupService<'a> {
             .await
     }
 
-    async fn run_for_provider(&self, provider: String) -> Result<ModelSetupResult, String> {
-        if provider == OPENAI_SUBSCRIPTION_PROVIDER_NAME {
-            return self.run_openai_provider(None, true).await;
-        }
-        let Some(base_url) = self.ask_base_url().await? else {
-            return Ok(ModelSetupResult::Cancelled);
-        };
-        let Some(model) = self.ask_model(&provider, &[], None).await? else {
-            return Ok(ModelSetupResult::Cancelled);
-        };
-        let Some(context_window) = self.ask_context_window().await? else {
-            return Ok(ModelSetupResult::Cancelled);
-        };
-        self.save_model(provider, base_url, model, context_window, true)
+    pub async fn run_openai_compatible(&self) -> Result<ModelSetupResult, String> {
+        let set_as_default = !self
+            .config
+            .load()
             .await
+            .map_err(|error| error.to_string())?
+            .models
+            .has_configured_default_model();
+        self.run_openai_compatible_provider(set_as_default).await
+    }
+
+    async fn run_for_provider(&self, provider: SetupProvider) -> Result<ModelSetupResult, String> {
+        match provider {
+            SetupProvider::OpenAiSubscription => self.run_openai_provider(None, true).await,
+            SetupProvider::OpenAiCompatible => self.run_openai_compatible_provider(true).await,
+            SetupProvider::Ollama => {
+                let Some(base_url) = self.ask_base_url().await? else {
+                    return Ok(ModelSetupResult::Cancelled);
+                };
+                let Some(model) = self.ask_model(DEFAULT_PROVIDER, &[], None).await? else {
+                    return Ok(ModelSetupResult::Cancelled);
+                };
+                let Some(context_window) = self.ask_context_window(DEFAULT_CONTEXT_WINDOW).await?
+                else {
+                    return Ok(ModelSetupResult::Cancelled);
+                };
+                self.save_model(
+                    ModelSetup {
+                        provider: DEFAULT_PROVIDER.to_owned(),
+                        provider_kind: ProviderKind::Ollama,
+                        base_url,
+                        token_source: None,
+                        model,
+                        context_window,
+                    },
+                    true,
+                )
+                .await
+            }
+        }
     }
 
     async fn run_openai_provider(
@@ -113,10 +150,51 @@ impl<'a> ModelSetupService<'a> {
             return Ok(ModelSetupResult::Cancelled);
         };
         self.save_model(
-            OPENAI_SUBSCRIPTION_PROVIDER_NAME.to_owned(),
-            OPENAI_APP_SERVER_URL.to_owned(),
-            model,
-            DEFAULT_OPENAI_CONTEXT_WINDOW,
+            ModelSetup {
+                provider: OPENAI_SUBSCRIPTION_PROVIDER_NAME.to_owned(),
+                provider_kind: ProviderKind::OpenAiSubscription,
+                base_url: OPENAI_APP_SERVER_URL.to_owned(),
+                token_source: None,
+                model,
+                context_window: DEFAULT_OPENAI_CONTEXT_WINDOW,
+            },
+            set_as_default,
+        )
+        .await
+    }
+
+    async fn run_openai_compatible_provider(
+        &self,
+        set_as_default: bool,
+    ) -> Result<ModelSetupResult, String> {
+        self.io.output(
+            "OpenAI-compatible APIs use provider API billing.",
+        );
+        let Some(provider) = self.ask_api_provider_name().await? else {
+            return Ok(ModelSetupResult::Cancelled);
+        };
+        let Some(base_url) = self.ask_api_base_url().await? else {
+            return Ok(ModelSetupResult::Cancelled);
+        };
+        let Some(token_source) = self.ask_token_source().await? else {
+            return Ok(ModelSetupResult::Cancelled);
+        };
+        let Some(model) = self.ask_model(&provider, &[], None).await? else {
+            return Ok(ModelSetupResult::Cancelled);
+        };
+        let Some(context_window) = self.ask_context_window(DEFAULT_API_CONTEXT_WINDOW).await?
+        else {
+            return Ok(ModelSetupResult::Cancelled);
+        };
+        self.save_model(
+            ModelSetup {
+                provider,
+                provider_kind: ProviderKind::OpenAiCompatible,
+                base_url,
+                token_source,
+                model,
+                context_window,
+            },
             set_as_default,
         )
         .await
@@ -124,18 +202,9 @@ impl<'a> ModelSetupService<'a> {
 
     async fn save_model(
         &self,
-        provider: String,
-        base_url: String,
-        model: String,
-        context_window: u64,
+        setup: ModelSetup,
         set_as_default: bool,
     ) -> Result<ModelSetupResult, String> {
-        let setup = ModelSetup {
-            provider: provider.clone(),
-            base_url,
-            model: model.clone(),
-            context_window,
-        };
         let config_path = if set_as_default {
             self.config.save_model_setup(&setup).await
         } else {
@@ -144,8 +213,8 @@ impl<'a> ModelSetupService<'a> {
         .map_err(|error| error.to_string())?;
         Ok(ModelSetupResult::Completed {
             config_path,
-            provider,
-            model,
+            provider: setup.provider,
+            model: setup.model,
         })
     }
 
@@ -156,7 +225,13 @@ impl<'a> ModelSetupService<'a> {
         }
     }
 
-    async fn ask_provider(&self) -> Result<Option<String>, String> {
+    async fn ask_provider(&self) -> Result<Option<SetupProvider>, String> {
+        self.io.output("Available providers:");
+        self.io.output("  ollama — local Ollama-compatible models");
+        self.io
+            .output("  openai — OpenAI models through a ChatGPT subscription");
+        self.io
+            .output("  openai-api — OpenAI Platform or another OpenAI-compatible API endpoint");
         loop {
             let Some(answer) = self
                 .io
@@ -165,31 +240,92 @@ impl<'a> ModelSetupService<'a> {
             else {
                 return Ok(None);
             };
-            let provider = defaulted(&answer, DEFAULT_PROVIDER);
-            if !provider.contains('/') && !provider.chars().any(char::is_whitespace) {
-                return Ok(Some(provider));
+            match defaulted(&answer, DEFAULT_PROVIDER).as_str() {
+                "1" | "ollama" => return Ok(Some(SetupProvider::Ollama)),
+                "2" | "openai" => return Ok(Some(SetupProvider::OpenAiSubscription)),
+                "3" | "openai-api" | "openai-compatible" => {
+                    return Ok(Some(SetupProvider::OpenAiCompatible));
+                }
+                _ => {
+                    self.io.output("Choose ollama, openai, or openai-api.");
+                }
             }
-            self.io
-                .output("Provider names cannot contain spaces or slashes.");
         }
     }
 
     async fn ask_base_url(&self) -> Result<Option<String>, String> {
+        self.ask_http_url(
+            &format!("Ollama-compatible base URL [{DEFAULT_BASE_URL}]: "),
+            DEFAULT_BASE_URL,
+        )
+        .await
+    }
+
+    async fn ask_api_base_url(&self) -> Result<Option<String>, String> {
+        self.ask_http_url(
+            &format!("OpenAI-compatible base URL [{DEFAULT_API_BASE_URL}]: "),
+            DEFAULT_API_BASE_URL,
+        )
+        .await
+    }
+
+    async fn ask_http_url(&self, prompt: &str, default: &str) -> Result<Option<String>, String> {
+        loop {
+            let Some(answer) = self.io.prompt(prompt).await? else {
+                return Ok(None);
+            };
+            let base_url = defaulted(&answer, default);
+            if valid_http_url(&base_url) {
+                return Ok(Some(base_url.trim_end_matches('/').to_owned()));
+            }
+            self.io.output("Enter a valid http:// or https:// URL.");
+        }
+    }
+
+    async fn ask_api_provider_name(&self) -> Result<Option<String>, String> {
+        loop {
+            let Some(answer) = self
+                .io
+                .prompt(&format!("Provider name [{DEFAULT_API_PROVIDER}]: "))
+                .await?
+            else {
+                return Ok(None);
+            };
+            let provider = defaulted(&answer, DEFAULT_API_PROVIDER);
+            if matches!(provider.as_str(), "openai" | "ollama") {
+                self.io.output(
+                    "The provider names openai and ollama are reserved for their built-in adapters.",
+                );
+            } else if !provider.contains('/') && !provider.chars().any(char::is_whitespace) {
+                return Ok(Some(provider));
+            } else {
+                self.io
+                    .output("Provider names cannot contain spaces or slashes.");
+            }
+        }
+    }
+
+    async fn ask_token_source(&self) -> Result<Option<Option<CredentialSource>>, String> {
         loop {
             let Some(answer) = self
                 .io
                 .prompt(&format!(
-                    "Ollama-compatible base URL [{DEFAULT_BASE_URL}]: "
+                    "API key environment variable [{DEFAULT_API_KEY_ENVIRONMENT}; type none for no authentication]: "
                 ))
                 .await?
             else {
                 return Ok(None);
             };
-            let base_url = defaulted(&answer, DEFAULT_BASE_URL);
-            if valid_http_url(&base_url) {
-                return Ok(Some(base_url.trim_end_matches('/').to_owned()));
+            let name = defaulted(&answer, DEFAULT_API_KEY_ENVIRONMENT);
+            if name.eq_ignore_ascii_case("none") {
+                return Ok(Some(None));
             }
-            self.io.output("Enter a valid http:// or https:// URL.");
+            if valid_environment_name(&name) {
+                return Ok(Some(Some(CredentialSource::Environment { name })));
+            }
+            self.io.output(
+                "Environment variable names must start with a letter or underscore and contain only letters, numbers, or underscores.",
+            );
         }
     }
 
@@ -254,18 +390,18 @@ impl<'a> ModelSetupService<'a> {
         }
     }
 
-    async fn ask_context_window(&self) -> Result<Option<u64>, String> {
+    async fn ask_context_window(&self, default: u64) -> Result<Option<u64>, String> {
         loop {
             let Some(answer) = self
                 .io
-                .prompt(&format!("Context window [{DEFAULT_CONTEXT_WINDOW}]: "))
+                .prompt(&format!("Context window [{default}]: "))
                 .await?
             else {
                 return Ok(None);
             };
             let value = answer.trim();
             if value.is_empty() {
-                return Ok(Some(DEFAULT_CONTEXT_WINDOW));
+                return Ok(Some(default));
             }
             if let Ok(context_window) = value.parse::<u64>()
                 && context_window > 0
@@ -297,6 +433,14 @@ fn valid_http_url(value: &str) -> bool {
     })
 }
 
+fn valid_environment_name(value: &str) -> bool {
+    let mut characters = value.chars();
+    characters
+        .next()
+        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -307,6 +451,7 @@ mod tests {
     use super::{ModelSetupIo, ModelSetupResult, ModelSetupService};
     use flowmation_application::{ConfigService, ModelSetup};
     use flowmation_codex::CodexModel;
+    use flowmation_domain::config::{CredentialSource, ProviderKind};
 
     struct ScriptedSetupIo {
         answers: Mutex<VecDeque<Option<String>>>,
@@ -399,6 +544,7 @@ mod tests {
         assert!(output.iter().any(|line| line.contains("valid http")));
         assert!(output.iter().any(|line| line.contains("Model name")));
         assert!(output.iter().any(|line| line.contains("positive whole")));
+        assert!(output.iter().any(|line| line.contains("openai-api")));
         Ok(())
     }
 
@@ -498,7 +644,9 @@ mod tests {
         config
             .save_model_setup(&ModelSetup {
                 provider: "ollama".to_owned(),
+                provider_kind: ProviderKind::Ollama,
                 base_url: "http://localhost:11434".to_owned(),
+                token_source: None,
                 model: "llama3.2".to_owned(),
                 context_window: 8_192,
             })
@@ -522,6 +670,54 @@ mod tests {
                 .iter()
                 .any(|model| model.name == "gpt-5.4-mini")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn configures_an_openai_compatible_api_without_storing_the_key()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let config = ConfigService::new(root.path().join("global"), root.path().join("project"));
+        let io = ScriptedSetupIo {
+            answers: Mutex::new(VecDeque::from([
+                Some("openai-api".to_owned()),
+                Some("openai".to_owned()),
+                Some("openrouter".to_owned()),
+                Some("https://openrouter.ai/api/v1/".to_owned()),
+                Some("OPENROUTER_API_KEY".to_owned()),
+                Some("example/model".to_owned()),
+                Some("131072".to_owned()),
+            ])),
+            output: Mutex::new(Vec::new()),
+            prompts: Mutex::new(Vec::new()),
+        };
+
+        let result = ModelSetupService::new(&config, &io).run().await?;
+
+        assert_eq!(
+            result,
+            ModelSetupResult::Completed {
+                config_path: root.path().join("global/models.json"),
+                provider: "openrouter".to_owned(),
+                model: "example/model".to_owned(),
+            }
+        );
+        let resolved = config.load().await?;
+        let provider = &resolved.models.providers["openrouter"];
+        assert_eq!(provider.kind, ProviderKind::OpenAiCompatible);
+        assert_eq!(provider.base_url, "https://openrouter.ai/api/v1");
+        assert_eq!(
+            provider.token_source,
+            Some(CredentialSource::Environment {
+                name: "OPENROUTER_API_KEY".to_owned()
+            })
+        );
+        let stored = tokio::fs::read_to_string(root.path().join("global/models.json")).await?;
+        assert!(!stored.contains("test-secret"));
+        assert!(stored.contains("OPENROUTER_API_KEY"));
+        let output = io.output.lock().map_err(|error| error.to_string())?;
+        assert!(output.iter().any(|line| line.contains("API billing")));
+        assert!(output.iter().any(|line| line.contains("reserved")));
         Ok(())
     }
 }

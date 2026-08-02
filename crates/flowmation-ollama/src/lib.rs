@@ -1,4 +1,3 @@
-use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -6,7 +5,7 @@ use flowmation_application::{
     ChatCompletionRequest, ChatCompletionResult, ChatMessage, ChatRole, ModelProvider,
     ProviderError, ThinkingMode, ToolCall,
 };
-use reqwest::StatusCode;
+use flowmation_http::{HttpTransport, HttpTransportError, ReqwestTransport};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
@@ -61,65 +60,6 @@ struct WireRequest {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 struct WireResponse {
     message: WireMessage,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HttpResponse {
-    pub status: StatusCode,
-    pub body: String,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum HttpTransportError {
-    #[error("{0}")]
-    Request(String),
-    #[error("request was cancelled")]
-    Cancelled,
-}
-
-#[async_trait]
-pub trait HttpTransport: Debug + Send + Sync {
-    async fn post_json(
-        &self,
-        url: &str,
-        body: Value,
-        cancellation: &CancellationToken,
-    ) -> Result<HttpResponse, HttpTransportError>;
-}
-
-#[derive(Debug)]
-pub struct ReqwestTransport {
-    client: reqwest::Client,
-}
-
-impl Default for ReqwestTransport {
-    fn default() -> Self {
-        Self {
-            client: reqwest::Client::new(),
-        }
-    }
-}
-
-#[async_trait]
-impl HttpTransport for ReqwestTransport {
-    async fn post_json(
-        &self,
-        url: &str,
-        body: Value,
-        cancellation: &CancellationToken,
-    ) -> Result<HttpResponse, HttpTransportError> {
-        let request = self.client.post(url).json(&body).send();
-        let response = tokio::select! {
-            () = cancellation.cancelled() => return Err(HttpTransportError::Cancelled),
-            response = request => response.map_err(|error| HttpTransportError::Request(error.to_string()))?,
-        };
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| HttpTransportError::Request(error.to_string()))?;
-        Ok(HttpResponse { status, body })
-    }
 }
 
 #[derive(Debug)]
@@ -241,7 +181,12 @@ impl ModelProvider for OllamaProvider {
             .map_err(|error| ProviderError::InvalidResponse(error.to_string()))?;
         let response = self
             .transport
-            .post_json(&format!("{}/api/chat", self.base_url), body, cancellation)
+            .post_json(
+                &format!("{}/api/chat", self.base_url),
+                None,
+                body,
+                cancellation,
+            )
             .await
             .map_err(|error| match error {
                 HttpTransportError::Cancelled => ProviderError::Cancelled,
@@ -270,11 +215,12 @@ mod tests {
         ChatCompletionOptions, ChatCompletionRequest, ChatMessage, ChatRole, ModelProvider,
         ThinkingMode,
     };
-    use reqwest::StatusCode;
+    use flowmation_http::{HttpResponse, HttpTransport, HttpTransportError};
+    use http::StatusCode;
     use serde_json::Value;
     use tokio_util::sync::CancellationToken;
 
-    use crate::{HttpResponse, HttpTransport, HttpTransportError, OllamaProvider};
+    use crate::OllamaProvider;
 
     #[derive(Debug)]
     struct RecordingTransport {
@@ -286,6 +232,7 @@ mod tests {
         async fn post_json(
             &self,
             _url: &str,
+            _bearer_token: Option<&str>,
             body: Value,
             _cancellation: &CancellationToken,
         ) -> Result<HttpResponse, HttpTransportError> {

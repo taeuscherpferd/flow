@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use flowmation_domain::config::{
-    AppConfig, ModelConfig, ModelsConfig, PartialModelsConfig, ProviderConfig, ResolvedConfig,
-    merge_agent_instructions, merge_skills_config, resolve_soul,
+    AppConfig, CredentialSource, ModelConfig, ModelsConfig, PartialModelsConfig, ProviderConfig,
+    ProviderKind, ResolvedConfig, merge_agent_instructions, merge_skills_config, resolve_soul,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -12,7 +12,9 @@ use thiserror::Error;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelSetup {
     pub provider: String,
+    pub provider_kind: ProviderKind,
     pub base_url: String,
+    pub token_source: Option<CredentialSource>,
     pub model: String,
     pub context_window: u64,
 }
@@ -39,6 +41,10 @@ pub enum ConfigServiceError {
         path: PathBuf,
         source: serde_json::Error,
     },
+    #[error(
+        "Project model configuration at {path} cannot define a credential source for provider \"{provider}\". Configure credentials in the global models.json file."
+    )]
+    ProjectCredentialSource { path: PathBuf, provider: String },
 }
 
 #[derive(Clone, Debug)]
@@ -84,9 +90,10 @@ impl ConfigService {
             read_json_if_exists::<ModelsConfig>(&self.global_dir.join("models.json"))
                 .await?
                 .unwrap_or_default();
+        let project_models_path = self.project_dir.join("models.json");
         let project_models =
-            read_json_if_exists::<PartialModelsConfig>(&self.project_dir.join("models.json"))
-                .await?;
+            read_json_if_exists::<PartialModelsConfig>(&project_models_path).await?;
+        reject_project_credential_sources(project_models.as_ref(), &project_models_path)?;
         let models = global_models.merge_project(project_models.as_ref());
         let global_app = read_json_if_exists::<AppConfig>(&self.global_dir.join("config.json"))
             .await?
@@ -167,7 +174,9 @@ impl ConfigService {
         current.providers.insert(
             setup.provider.clone(),
             ProviderConfig {
+                kind: setup.provider_kind,
                 base_url: setup.base_url.clone(),
+                token_source: setup.token_source.clone(),
                 models,
             },
         );
@@ -223,6 +232,26 @@ impl ConfigService {
     }
 }
 
+fn reject_project_credential_sources(
+    config: Option<&PartialModelsConfig>,
+    path: &Path,
+) -> Result<(), ConfigServiceError> {
+    let credential_provider = config
+        .and_then(|config| config.providers.as_ref())
+        .and_then(|providers| {
+            providers
+                .iter()
+                .find(|(_, provider)| provider.token_source.is_some())
+        });
+    if let Some((provider, _)) = credential_provider {
+        return Err(ConfigServiceError::ProjectCredentialSource {
+            path: path.to_path_buf(),
+            provider: provider.clone(),
+        });
+    }
+    Ok(())
+}
+
 async fn read_text_if_exists(path: &Path) -> Result<Option<String>, ConfigServiceError> {
     match tokio::fs::read_to_string(path).await {
         Ok(content) => Ok(Some(content)),
@@ -274,9 +303,10 @@ fn user_home() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use flowmation_domain::config::ProviderKind;
     use tempfile::tempdir;
 
-    use super::{ConfigService, ModelSetup};
+    use super::{ConfigService, ConfigServiceError, ModelSetup};
 
     #[tokio::test]
     async fn loads_first_run_scaffold_without_a_model() -> Result<(), Box<dyn std::error::Error>> {
@@ -295,7 +325,9 @@ mod tests {
         let path = service
             .save_model_setup(&ModelSetup {
                 provider: "local".to_owned(),
+                provider_kind: ProviderKind::Ollama,
                 base_url: "http://localhost:11434".to_owned(),
+                token_source: None,
                 model: "qwen3:8b".to_owned(),
                 context_window: 16_384,
             })
@@ -315,7 +347,9 @@ mod tests {
         service
             .save_model_setup(&ModelSetup {
                 provider: "local".to_owned(),
+                provider_kind: ProviderKind::Ollama,
                 base_url: "http://localhost:11434".to_owned(),
+                token_source: None,
                 model: "qwen3:8b".to_owned(),
                 context_window: 16_384,
             })
@@ -324,7 +358,9 @@ mod tests {
         service
             .add_model(&ModelSetup {
                 provider: "openai".to_owned(),
+                provider_kind: ProviderKind::OpenAiSubscription,
                 base_url: "codex://app-server".to_owned(),
+                token_source: None,
                 model: "gpt-5.6".to_owned(),
                 context_window: 1_050_000,
             })
@@ -334,6 +370,43 @@ mod tests {
         assert_eq!(config.models.default_provider, "local");
         assert_eq!(config.models.default_model, "qwen3:8b");
         assert_eq!(config.models.providers["openai"].models[0].name, "gpt-5.6");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rejects_project_defined_environment_credentials()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let project_dir = root.path().join("project");
+        tokio::fs::create_dir_all(&project_dir).await?;
+        tokio::fs::write(
+            project_dir.join("models.json"),
+            r#"{
+                "providers": {
+                    "remote": {
+                        "kind": "openai-compatible",
+                        "baseUrl": "https://example.test/v1",
+                        "tokenSource": {
+                            "type": "environment",
+                            "name": "OPENAI_API_KEY"
+                        },
+                        "models": []
+                    }
+                }
+            }"#,
+        )
+        .await?;
+        let service = ConfigService::new(root.path().join("global"), &project_dir);
+
+        let Err(error) = service.load().await else {
+            return Err("project credentials accepted".into());
+        };
+
+        assert!(matches!(
+            error,
+            ConfigServiceError::ProjectCredentialSource { provider, .. }
+                if provider == "remote"
+        ));
         Ok(())
     }
 }

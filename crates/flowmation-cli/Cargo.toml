@@ -18,6 +18,7 @@ flowmation-application = { path = "../flowmation-application" }
 flowmation-codex = { path = "../flowmation-codex" }
 flowmation-domain = { path = "../flowmation-domain" }
 flowmation-ollama = { path = "../flowmation-ollama" }
+flowmation-openai-compatible = { path = "../flowmation-openai-compatible" }
 flowmation-sqlite = { path = "../flowmation-sqlite" }
 flowmation-workflow-host = { path = "../flowmation-workflow-host" }
 serde_json.workspace = true

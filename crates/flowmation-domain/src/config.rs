@@ -16,8 +16,27 @@ pub struct ModelConfig {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
+    pub kind: ProviderKind,
     pub base_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_source: Option<CredentialSource>,
     pub models: Vec<ModelConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderKind {
+    Ollama,
+    #[serde(rename = "openai-subscription")]
+    OpenAiSubscription,
+    #[serde(rename = "openai-compatible")]
+    OpenAiCompatible,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum CredentialSource {
+    Environment { name: String },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -38,7 +57,9 @@ impl Default for ModelsConfig {
             providers: BTreeMap::from([(
                 "ollama".to_owned(),
                 ProviderConfig {
+                    kind: ProviderKind::Ollama,
                     base_url: "http://localhost:11434".to_owned(),
+                    token_source: None,
                     models: Vec::new(),
                 },
             )]),
