@@ -10,8 +10,6 @@ use crate::provider::{
 };
 use crate::tool::{ToolExecutionContext, ToolRegistry};
 
-const MAX_TOOL_ITERATIONS: usize = 8;
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum AgentTools {
     #[default]
@@ -139,7 +137,7 @@ impl AgentService {
             .push(ChatMessage::new(ChatRole::User, text.into()));
         self.compact_if_needed();
 
-        for _ in 0..MAX_TOOL_ITERATIONS {
+        loop {
             if cancellation.is_cancelled() {
                 return Err(AgentError::Cancelled);
             }
@@ -204,7 +202,6 @@ impl AgentService {
                 });
             }
         }
-        Ok("I hit my internal tool-call limit for this turn — try rephrasing or breaking the task down.".to_owned())
     }
 
     pub fn clear_history(&mut self, system_contexts: &[String]) {
@@ -663,6 +660,60 @@ mod tests {
         assert_eq!(
             requests[1].messages[2].thinking.as_deref(),
             Some("use a tool")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn continues_tool_loop_until_the_model_finishes() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut responses = VecDeque::new();
+        for index in 0..9 {
+            let mut arguments = Map::new();
+            arguments.insert(
+                "text".to_owned(),
+                serde_json::Value::String(format!("tool output {index}")),
+            );
+            responses.push_back(ChatCompletionResult {
+                message: ChatMessage {
+                    role: ChatRole::Assistant,
+                    content: String::new(),
+                    thinking: None,
+                    tool_calls: vec![ToolCall {
+                        id: format!("call-{index}"),
+                        name: "echo".to_owned(),
+                        arguments,
+                    }],
+                    tool_call_id: None,
+                    tool_name: None,
+                },
+            });
+        }
+        responses.push_back(ChatCompletionResult {
+            message: ChatMessage::new(ChatRole::Assistant, "complete"),
+        });
+        let provider = Arc::new(RecordingProvider {
+            requests: Mutex::new(Vec::new()),
+            responses: Mutex::new(responses),
+        });
+        let mut service = service(Arc::clone(&provider));
+
+        let content = service
+            .handle_user_message(
+                "Complete a long tool-driven task",
+                AgentTurnOptions::default(),
+                &CancellationToken::new(),
+            )
+            .await?;
+
+        assert_eq!(content, "complete");
+        assert_eq!(
+            provider
+                .requests
+                .lock()
+                .map_err(|error| error.to_string())?
+                .len(),
+            10
         );
         Ok(())
     }

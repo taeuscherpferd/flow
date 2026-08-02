@@ -25,8 +25,8 @@ pub use manager::{
 };
 pub use model::{ModelReference, ResolvedModel, list_model_references, resolve_model};
 pub use policy::{
-    AuthorizationDecision, AuthorizationPolicy, PermissionBroker, PermissionRequest,
-    StandardAuthorizationPolicy,
+    AuthorizationDecision, AuthorizationPolicy, FixedPermissionBroker, PermissionBroker,
+    PermissionRequest, StandardAuthorizationPolicy,
 };
 pub use provider::{
     ChatCompletionOptions, ChatCompletionRequest, ChatCompletionResult, ChatMessage, ChatRole,

@@ -1,6 +1,7 @@
 mod command;
 mod line_editor;
 mod model_setup;
+#[cfg(test)]
 mod permission_prompt;
 mod provider_factory;
 mod spinner;
@@ -18,10 +19,10 @@ use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use flowmation_application::scheduling::ScheduleRepository;
 use flowmation_application::{
-    AgentManager, ConfigService, HumanRequestBroker, ManagedWorkflowAgentRuntime,
-    StandardAuthorizationPolicy, WorkflowAgentRuntime, WorkflowCallbackServices,
-    WorkflowConfirmation, WorkflowDurability, WorkflowLogSink, WorkflowRegistry,
-    WorkflowRegistryRoot, WorkflowRunner, WorkflowToolRuntime,
+    AgentManager, AuthorizationDecision, AuthorizationPolicy, ConfigService, FixedPermissionBroker,
+    HumanRequestBroker, ManagedWorkflowAgentRuntime, StandardAuthorizationPolicy,
+    WorkflowAgentRuntime, WorkflowCallbackServices, WorkflowConfirmation, WorkflowDurability,
+    WorkflowLogSink, WorkflowRegistry, WorkflowRegistryRoot, WorkflowRunner, WorkflowToolRuntime,
 };
 use flowmation_codex::{
     CodexAccountStatus, CodexModel, CodexProvider, OPENAI_SUBSCRIPTION_PROVIDER_NAME,
@@ -42,7 +43,6 @@ use uuid::Uuid;
 
 use crate::command::{BUILTIN_COMMANDS, HELP_TEXT, ReplCommand, parse_repl_line};
 use crate::model_setup::{ModelSetupIo, ModelSetupResult, ModelSetupService, format_openai_model};
-use crate::permission_prompt::{PermissionPrompt, SerializedPermissionBroker};
 use crate::provider_factory::create_model_providers;
 use crate::spinner::Spinner;
 use crate::workflow_commands::WorkflowRunScope;
@@ -125,6 +125,12 @@ impl Debug for CliWorkflowToolRuntime {
     }
 }
 
+fn interactive_authorization() -> Arc<dyn AuthorizationPolicy> {
+    Arc::new(StandardAuthorizationPolicy::new(Arc::new(
+        FixedPermissionBroker::new(AuthorizationDecision::Allow),
+    )))
+}
+
 impl Runtime {
     async fn create(config: flowmation_domain::config::ResolvedConfig) -> Result<Self, String> {
         let providers = create_model_providers(&config.models);
@@ -132,9 +138,7 @@ impl Runtime {
             SqliteApplicationRepository::open_global_dir(&config.global_dir)
                 .map_err(|error| error.to_string())?,
         );
-        let authorization = Arc::new(StandardAuthorizationPolicy::new(Arc::new(
-            SerializedPermissionBroker::new(TerminalPermissionPrompt),
-        )));
+        let authorization = interactive_authorization();
         let manager = AgentManager::create(
             config.clone(),
             providers.clone(),
@@ -1056,17 +1060,6 @@ Flowmation use ChatGPT sign-in."
 }
 
 #[derive(Debug)]
-struct TerminalPermissionPrompt;
-
-#[async_trait]
-impl PermissionPrompt for TerminalPermissionPrompt {
-    async fn confirm(&self, prompt: &str, details: &str) -> Result<Option<String>, String> {
-        println!("{details}");
-        read_line(&format!("{prompt} [y/N] ")).await
-    }
-}
-
-#[derive(Debug)]
 struct TerminalHumanBroker;
 
 #[async_trait]
@@ -1149,4 +1142,38 @@ fn default_database_path() -> PathBuf {
         || PathBuf::from(".work-agent/runs.sqlite"),
         |home| PathBuf::from(home).join(".work-agent/runs.sqlite"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use flowmation_application::{
+        AuthorizationDecision, ExecutionMode, PermissionRequest, ToolEffect, ToolPermissionMode,
+    };
+    use serde_json::Map;
+
+    use super::interactive_authorization;
+
+    #[tokio::test]
+    async fn interactive_authorization_allows_effectful_tools_without_prompting() {
+        let authorization = interactive_authorization();
+        for effect in [
+            ToolEffect::Write,
+            ToolEffect::Command,
+            ToolEffect::External,
+            ToolEffect::Schedule,
+        ] {
+            assert_eq!(
+                authorization
+                    .authorize(PermissionRequest {
+                        tool_name: "effectful-tool".to_owned(),
+                        arguments: Map::new(),
+                        effect,
+                        permission_mode: ToolPermissionMode::Effect,
+                        execution_mode: ExecutionMode::Direct,
+                    })
+                    .await,
+                AuthorizationDecision::Allow
+            );
+        }
+    }
 }

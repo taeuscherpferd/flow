@@ -6,15 +6,17 @@ Flowmation separates model-requested tools from trusted workflow modules.
 
 Tools declare one of five effect classes:
 
-- `read`: local inspection; allowed automatically.
-- `write`: filesystem mutation; requires foreground approval.
-- `command`: process execution; requires foreground approval.
-- `external`: another effectful action; requires foreground approval.
-- `schedule`: schedule creation or mutation; requires foreground approval.
+- `read`: local inspection.
+- `write`: filesystem mutation.
+- `command`: process execution.
+- `external`: another effectful action.
+- `schedule`: schedule creation or mutation.
 
 The active agent's allowlist is applied before tools are shown to the model.
-An unlisted or unregistered tool cannot run. Concurrent terminal permission
-prompts are serialized.
+An unlisted or unregistered tool cannot run. Interactive model tool calls are
+currently allowed without a per-call permission prompt. Effect metadata remains
+part of the authorization request so configurable permissions can be added
+without changing tool contracts.
 
 `run_workflow` is self-managed. `disabled` workflows are unavailable,
 `confirm` workflows prompt with the exact input, and `automatic` workflows do
@@ -76,7 +78,7 @@ worker process.
 
 ## Human input
 
-Foreground human and permission prompts are serialized. A scheduled workflow
-cannot prompt: an unanswered human callback persists a waiting run,
-occurrence, and unread notification. `/resume` can continue a discoverable
-workflow in a foreground process and reuse completed durable human responses.
+Foreground human prompts are serialized. A scheduled workflow cannot prompt:
+an unanswered human callback persists a waiting run, occurrence, and unread
+notification. `/resume` can continue a discoverable workflow in a foreground
+process and reuse completed durable human responses.

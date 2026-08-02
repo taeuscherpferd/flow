@@ -238,6 +238,13 @@ conversation, and `/agent main` returns to the coordinator. Conversations are
 stored in `~/.work-agent/runs.sqlite`; system messages are rebuilt and never
 persisted.
 
+Interactive agents may use any registered tool in their allowlist without a
+per-call permission prompt. Their tool loop continues until the model returns a
+tool-free response, the provider fails, or the user cancels the turn; there is
+no default iteration cap. Scheduled agent execution remains non-interactive and
+denies effectful model tools. Workflow `confirm` policies and workflow-authored
+human approval steps still prompt separately.
+
 The runtime supports specialist chat and isolated workflow-created agent
 sessions. Coordinator delegation tools and interactive agent-package-local
 workflow discovery are not implemented. See [docs/agents.md](docs/agents.md).

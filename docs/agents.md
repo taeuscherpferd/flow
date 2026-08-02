@@ -66,8 +66,8 @@ registers:
 | Tool | Effect and behavior |
 | --- | --- |
 | `read_file` | Read effect; reads text relative to the launch project unless given an absolute path. |
-| `write_file` | Write effect; asks for terminal approval, creates parents, and overwrites the target. |
-| `run_command` | Command effect; asks for terminal approval, uses the platform shell, has a 30-second timeout, and retains at most 500 KB from each output stream. |
+| `write_file` | Write effect; creates parents and overwrites the target without a per-call prompt. |
+| `run_command` | Command effect; runs without a per-call prompt, uses the platform shell, has a 30-second timeout, and retains at most 500 KB from each output stream. |
 | `load_skill` | Read effect; returns the rendered body of an exact active-agent skill. |
 | `run_workflow` | Self-managed external effect; exposes eligible top-level workflows and honors their `disabled`, `confirm`, or `automatic` policy. |
 
