@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Workflow"
+  short_description: "Create and refine Flowmation workflows"
+  default_prompt: "Use $create-workflow to build a durable Flowmation workflow for this process."

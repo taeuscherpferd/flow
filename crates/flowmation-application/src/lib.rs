@@ -1,4 +1,5 @@
 pub mod agent;
+mod builtin_skills;
 pub mod builtin_tools;
 pub mod config;
 pub mod events;
@@ -8,6 +9,7 @@ pub mod policy;
 mod process;
 pub mod provider;
 pub mod registry;
+pub mod schedule_tool;
 pub mod scheduling;
 pub mod tool;
 pub mod workflow;
@@ -35,9 +37,11 @@ pub use provider::{
 pub use registry::{
     AgentDirectoryListing, AgentPackageRegistry, AgentProfile, SkillsService, build_system_prompt,
 };
+pub use schedule_tool::{CreateScheduleTool, ScheduleToolRuntime, parse_schedule_request};
 pub use scheduling::{
     PreparedScheduleReauthorization, ScheduleExecution, ScheduleRepository, ScheduleRequest,
-    ScheduleService, ScheduleWorker, ScheduleWorkerRepository, WorkerExecutionResult,
+    ScheduleService, ScheduleTiming, ScheduleWorker, ScheduleWorkerRepository,
+    ScheduledWorkflowCatalog, WorkerExecutionResult,
 };
 pub use tool::{
     ExecutionMode, SecretsProvider, Tool, ToolEffect, ToolExecutionContext, ToolPermissionMode,

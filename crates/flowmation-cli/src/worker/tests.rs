@@ -9,7 +9,7 @@ use flowmation_application::workflow::WorkflowRecord;
 use flowmation_domain::agent::PackageSource;
 use flowmation_domain::fingerprint::fingerprint_directory;
 use flowmation_domain::ids::ScheduleId;
-use flowmation_domain::schedule::{ScheduleRecord, ScheduleStatus};
+use flowmation_domain::schedule::{ScheduleKind, ScheduleRecord, ScheduleStatus};
 use flowmation_sqlite::{
     CreateSchedule, ScheduleOccurrenceStatus, SqliteApplicationRepository, SqliteDatabase,
     WorkflowTrigger,
@@ -42,6 +42,7 @@ async fn changed_source_is_rejected_without_evaluating_the_module() -> Result<()
         agent_name: "main".to_owned(),
         workflow_name: "scheduled-report".to_owned(),
         input: json!(""),
+        kind: ScheduleKind::Cron,
         cron: "* * * * *".to_owned(),
         timezone: "UTC".to_owned(),
         package_fingerprint: fingerprint_directory(&workflow_dir)?,
@@ -83,6 +84,7 @@ fn project_workflow_source_takes_precedence_over_global() -> Result<(), Box<dyn 
         agent_name: "main".to_owned(),
         workflow_name: "scheduled-report".to_owned(),
         input: json!(""),
+        kind: ScheduleKind::Cron,
         cron: "* * * * *".to_owned(),
         timezone: "UTC".to_owned(),
         package_fingerprint: "fingerprint".to_owned(),
@@ -119,6 +121,7 @@ async fn scheduled_durability_links_occurrence_before_recording_trigger()
         agent_name: "main".to_owned(),
         workflow_name: "scheduled-report".to_owned(),
         input: json!(""),
+        kind: flowmation_sqlite::ScheduleKind::Cron,
         cron: "* * * * *".to_owned(),
         timezone: "UTC".to_owned(),
         package_fingerprint: "fingerprint".to_owned(),

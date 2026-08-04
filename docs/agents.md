@@ -71,8 +71,9 @@ registers:
 | `load_skill` | Read effect; returns the rendered body of an exact active-agent skill. |
 | `run_workflow` | Self-managed external effect; exposes eligible top-level workflows and honors their `disabled`, `confirm`, or `automatic` policy. |
 
-The manifest format also recognizes delegation and schedule tool names, but
-the CLI does not register those implementations.
+The manifest format also recognizes delegation and schedule tool names. The
+coordinator registers `create_schedule`; a specialist receives it when its
+manifest includes `create_schedule`. Delegation is not implemented.
 
 `SOUL.md` supplies persona and priorities. `AGENTS.md` supplies operational
 instructions. `CONTEXT.md` is inserted into the system prompt. Files under
@@ -86,15 +87,22 @@ frontmatter name must be lowercase kebab-case and match its directory. Metadata
 appears in the system prompt, while the body is loaded only through
 `/<skill-name>` or `load_skill`.
 
+The coordinator embeds `create-skill`, `create-workflow`, and `create-schedule`
+authoring skills. A specialist whose tool policy includes `create_schedule`
+also receives the `create-schedule` skill. These skills are available without files in
+`~/.work-agent/skills`. A global or project skill with the same name overrides
+the built-in version, following the normal built-in, global, then project
+precedence. New skills and workflows are discovered the next time Flowmation
+starts.
+
 The active specialist can load its own skills. Cross-agent skill lookup and
 coordinator short-name resolution are not implemented.
 
 All files in an agent package contribute to its authorization fingerprint.
-The interactive workflow registry still scans only top-level global and
-project `workflows/` directories; it does not discover
-`agents/<name>/workflows/`. The schedule worker can resolve an already
-authorized specialist schedule from the owning package's `workflows/`
-directory.
+Interactive workflow execution still scans only top-level global and project
+`workflows/` directories. Schedule creation additionally discovers
+`agents/<name>/workflows/`, and the worker resolves an authorized specialist
+schedule from that same owning package.
 
 ## Conversations
 

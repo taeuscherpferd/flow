@@ -122,3 +122,10 @@ Windows; the Rust suite does not provide Windows descendant-tree coverage.
 | `ScheduleService` — reauthorizes the exact prospective fingerprint shown | **Mapped** | `flowmation-application/tests/scheduling_parity.rs::reauthorizes_the_exact_prospective_fingerprint_shown_for_approval` |
 | `ScheduleWorker` — runs one catch-up occurrence and records its scheduled trigger | **Mapped** | `flowmation-sqlite/tests/scheduling_worker.rs::runs_one_catch_up_occurrence_records_trigger_and_recovers` |
 | `ScheduleWorker` — rejects changed source before evaluating its module | **Mapped** | `flowmation-sqlite/tests/scheduling_worker.rs::rejects_changed_source_before_evaluating_and_persists_invalidation` |
+
+One-shot scheduling adds Rust-native coverage for request parsing, rejecting
+past timestamps, atomically exhausting a claimed schedule, and executing only
+one occurrence. See `schedule_tool::tests::parses_one_shot_and_cron_requests`,
+`scheduling_parity::creates_one_shot_schedules_and_rejects_past_times`,
+`fresh_database::claiming_a_one_shot_schedule_exhausts_it_atomically`, and
+`scheduling_worker::one_shot_schedule_runs_once_and_becomes_completed`.

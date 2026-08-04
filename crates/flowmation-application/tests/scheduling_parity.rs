@@ -3,13 +3,13 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use flowmation_application::scheduling::{
-    ScheduleRepository, ScheduleRequest, ScheduleService, ScheduledWorkflowCatalog,
+    ScheduleRepository, ScheduleRequest, ScheduleService, ScheduleTiming, ScheduledWorkflowCatalog,
 };
 use flowmation_application::workflow::WorkflowRecord;
 use flowmation_domain::agent::PackageSource;
 use flowmation_domain::ids::ScheduleId;
 use flowmation_domain::schedule::{
-    CreateScheduleInput, ScheduleOccurrence, ScheduleRecord, ScheduleStatus,
+    CreateScheduleInput, ScheduleKind, ScheduleOccurrence, ScheduleRecord, ScheduleStatus,
 };
 use flowmation_workflow_host::protocol::{
     AgentInvocationPolicy, WorkflowMetadata, WorkflowPresentation,
@@ -55,6 +55,7 @@ impl ScheduleRepository for ReauthorizationRepository {
             agent_name: input.agent_name.clone(),
             workflow_name: input.workflow_name.clone(),
             input: input.input.clone(),
+            kind: input.kind,
             cron: input.cron.clone(),
             timezone: input.timezone.clone(),
             package_fingerprint: input.package_fingerprint.clone(),
@@ -131,8 +132,10 @@ fn reauthorizes_the_exact_prospective_fingerprint_shown_for_approval()
         agent_name: "main".to_owned(),
         workflow_name: "scheduled-report".to_owned(),
         input: json!(""),
-        cron: "* * * * *".to_owned(),
-        timezone: Some("UTC".to_owned()),
+        timing: flowmation_application::ScheduleTiming::Cron {
+            expression: "* * * * *".to_owned(),
+            timezone: Some("UTC".to_owned()),
+        },
         now: Some("2026-07-25T12:00:00Z".parse()?),
     })?;
     *catalog
@@ -158,6 +161,42 @@ fn reauthorizes_the_exact_prospective_fingerprint_shown_for_approval()
     let updated = service.reauthorize(&prepared)?;
     assert_eq!(updated.package_fingerprint, "approved");
     assert_eq!(updated.next_run_at, prepared.confirmation.next_run_at);
+    Ok(())
+}
+
+#[test]
+fn creates_one_shot_schedules_and_rejects_past_times() -> Result<(), Box<dyn std::error::Error>> {
+    let service = ScheduleService::new(
+        "/project",
+        Arc::new(Catalog {
+            fingerprint: Mutex::new("approved".to_owned()),
+        }),
+        Arc::new(ReauthorizationRepository::default()),
+    );
+    let now = "2026-07-25T12:00:00Z".parse()?;
+    let run_at = "2026-07-30T12:00:00Z".parse()?;
+    let request = ScheduleRequest {
+        agent_name: "main".to_owned(),
+        workflow_name: "scheduled-report".to_owned(),
+        input: json!(""),
+        timing: ScheduleTiming::Once { run_at },
+        now: Some(now),
+    };
+
+    let confirmation = service.preview_confirmation(&request)?;
+    let schedule = service.create(&request)?;
+    assert!(confirmation.contains("Run once at: 2026-07-30T12:00:00.000Z"));
+    assert_eq!(schedule.kind, ScheduleKind::Once);
+    assert!(schedule.cron.is_empty());
+    assert_eq!(schedule.next_run_at, "2026-07-30T12:00:00.000Z");
+
+    let past = ScheduleRequest {
+        timing: ScheduleTiming::Once {
+            run_at: "2026-07-24T12:00:00Z".parse()?,
+        },
+        ..request
+    };
+    assert!(service.create(&past).is_err());
     Ok(())
 }
 

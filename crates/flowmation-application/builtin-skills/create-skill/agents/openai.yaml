@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Skill"
+  short_description: "Create and refine Flowmation skills"
+  default_prompt: "Use $create-skill to create a reusable project skill for this task."

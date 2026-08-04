@@ -11,6 +11,7 @@ pub enum ScheduleStatus {
     Active,
     Paused,
     NeedsReauthorization,
+    Completed,
 }
 
 impl ScheduleStatus {
@@ -18,11 +19,20 @@ impl ScheduleStatus {
     pub const fn can_transition_to(self, next: Self) -> bool {
         matches!(
             (self, next),
-            (Self::Active, Self::Paused | Self::NeedsReauthorization)
-                | (Self::Paused, Self::Active | Self::NeedsReauthorization)
+            (
+                Self::Active,
+                Self::Paused | Self::NeedsReauthorization | Self::Completed
+            ) | (Self::Paused, Self::Active | Self::NeedsReauthorization)
                 | (Self::NeedsReauthorization, Self::Active)
         )
     }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScheduleKind {
+    Cron,
+    Once,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -81,6 +91,7 @@ pub struct ScheduleRecord {
     pub agent_name: String,
     pub workflow_name: String,
     pub input: JsonValue,
+    pub kind: ScheduleKind,
     pub cron: String,
     pub timezone: String,
     pub package_fingerprint: String,
@@ -130,6 +141,7 @@ pub struct CreateScheduleInput {
     pub agent_name: String,
     pub workflow_name: String,
     pub input: JsonValue,
+    pub kind: ScheduleKind,
     pub cron: String,
     pub timezone: String,
     pub package_fingerprint: String,
@@ -139,13 +151,14 @@ pub struct CreateScheduleInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScheduleOccurrenceStatus, ScheduleStatus};
+    use super::{ScheduleKind, ScheduleOccurrenceStatus, ScheduleStatus};
 
     #[test]
     fn schedule_statuses_use_legacy_kebab_case() -> Result<(), Box<dyn std::error::Error>> {
         let serialized = serde_json::to_string(&ScheduleStatus::NeedsReauthorization)?;
 
         assert_eq!(serialized, "\"needs-reauthorization\"");
+        assert_eq!(serde_json::to_string(&ScheduleKind::Once)?, "\"once\"");
         Ok(())
     }
 
@@ -165,5 +178,7 @@ mod tests {
             !ScheduleOccurrenceStatus::Completed
                 .can_transition_to(ScheduleOccurrenceStatus::Running)
         );
+        assert!(ScheduleStatus::Active.can_transition_to(ScheduleStatus::Completed));
+        assert!(!ScheduleStatus::Completed.can_transition_to(ScheduleStatus::Active));
     }
 }

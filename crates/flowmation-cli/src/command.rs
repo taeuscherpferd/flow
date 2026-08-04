@@ -54,8 +54,10 @@ pub const HELP_TEXT: &str = r#"Commands:
   /resume <id>     Resume a waiting or interrupted workflow run
   /cancel <id>     Cancel a workflow run
   /schedules       List project schedules
+  /schedule create <json>
+                    Create a confirmed one-shot or cron workflow schedule
   /schedule <id>   Inspect a schedule and its occurrences
-  /schedule pause|resume|delete|reauthorize <id>
+  /schedule pause|resume|delete <id>
                     Manage a schedule
   /workflow-debug [on|off]
                     Show or hide workflow and agent status messages

@@ -60,6 +60,12 @@ string_enum!(ScheduleStatus {
     Active => "active",
     Paused => "paused",
     NeedsReauthorization => "needs-reauthorization",
+    Completed => "completed",
+});
+
+string_enum!(ScheduleKind {
+    Cron => "cron",
+    Once => "once",
 });
 
 string_enum!(ScheduleOccurrenceStatus {
@@ -172,6 +178,7 @@ pub struct CreateSchedule {
     pub agent_name: String,
     pub workflow_name: String,
     pub input: Value,
+    pub kind: ScheduleKind,
     pub cron: String,
     pub timezone: String,
     pub package_fingerprint: String,
@@ -186,6 +193,7 @@ pub struct ScheduleRecord {
     pub agent_name: String,
     pub workflow_name: String,
     pub input: Value,
+    pub kind: ScheduleKind,
     pub cron: String,
     pub timezone: String,
     pub package_fingerprint: String,

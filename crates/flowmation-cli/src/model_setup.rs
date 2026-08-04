@@ -167,9 +167,8 @@ impl<'a> ModelSetupService<'a> {
         &self,
         set_as_default: bool,
     ) -> Result<ModelSetupResult, String> {
-        self.io.output(
-            "OpenAI-compatible APIs use provider API billing.",
-        );
+        self.io
+            .output("OpenAI-compatible APIs use provider API billing.");
         let Some(provider) = self.ask_api_provider_name().await? else {
             return Ok(ModelSetupResult::Cancelled);
         };

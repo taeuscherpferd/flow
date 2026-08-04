@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Schedule"
+  short_description: "Create one-shot and cron schedules"
+  default_prompt: "Use $create-schedule to create and save a workflow schedule through the scheduling tool."

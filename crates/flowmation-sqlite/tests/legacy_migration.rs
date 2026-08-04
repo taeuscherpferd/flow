@@ -1,8 +1,8 @@
 use std::error::Error;
 
 use flowmation_sqlite::{
-    LATEST_MIGRATION_VERSION, ScheduleOccurrenceStatus, SqliteDatabase, WorkflowRunStatus,
-    WorkflowTrigger,
+    LATEST_MIGRATION_VERSION, ScheduleKind, ScheduleOccurrenceStatus, SqliteDatabase,
+    WorkflowRunStatus, WorkflowTrigger,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -128,6 +128,7 @@ fn completes_a_partially_present_schedule_schema_additively() -> Result<(), Box<
         .get("old-schedule")?
         .ok_or("legacy schedule was not preserved")?;
     assert_eq!(schedule.package_fingerprint, "old-fingerprint");
+    assert_eq!(schedule.kind, ScheduleKind::Cron);
     let occurrence = database
         .occurrences()
         .get("old-occurrence")?

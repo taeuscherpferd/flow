@@ -3,8 +3,9 @@ use std::error::Error;
 use chrono::{DateTime, Utc};
 use flowmation_sqlite::{
     AgentSessionRecord, ChatRole, CreateSchedule, CreateWorkflowRun, LATEST_MIGRATION_VERSION,
-    NewWorkflowStep, OccurrenceUpdate, ScheduleOccurrenceStatus, SqliteDatabase, StoredChatMessage,
-    WorkflowPresentation, WorkflowRunStatus, WorkflowStepKind, WorkflowStepState, WorkflowTrigger,
+    NewWorkflowStep, OccurrenceUpdate, ScheduleKind, ScheduleOccurrenceStatus, ScheduleStatus,
+    SqliteDatabase, StoredChatMessage, WorkflowPresentation, WorkflowRunStatus, WorkflowStepKind,
+    WorkflowStepState, WorkflowTrigger,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -34,6 +35,7 @@ fn schedule() -> CreateSchedule {
         agent_name: "finance".to_owned(),
         workflow_name: "monthly-close".to_owned(),
         input: json!({ "month": "2025-12" }),
+        kind: ScheduleKind::Cron,
         cron: "0 9 1 * *".to_owned(),
         timezone: "America/Denver".to_owned(),
         package_fingerprint: "abc123".to_owned(),
@@ -57,7 +59,7 @@ fn creates_the_legacy_compatible_schema_and_configures_sqlite() -> Result<(), Bo
             .iter()
             .map(|migration| migration.version)
             .collect::<Vec<_>>(),
-        vec![1, 2, 3, 4, 5]
+        vec![1, 2, 3, 4, 5, 6]
     );
 
     let connection = Connection::open(database.path())?;
@@ -92,6 +94,45 @@ fn creates_the_legacy_compatible_schema_and_configures_sqlite() -> Result<(), Bo
             && column.2 == 1
             && column.3.as_deref() == Some("'{\"type\":\"manual\"}'")
     }));
+    let schedule_columns = table_columns(&connection, "schedules")?;
+    assert!(schedule_columns.iter().any(|column| {
+        column.0 == "schedule_kind"
+            && column.1 == "TEXT"
+            && column.2 == 1
+            && column.3.as_deref() == Some("'cron'")
+    }));
+    Ok(())
+}
+
+#[test]
+fn claiming_a_one_shot_schedule_exhausts_it_atomically() -> Result<(), Box<dyn Error>> {
+    let mut database = SqliteDatabase::open_in_memory()?;
+    let mut input = schedule();
+    input.id = Some("one-shot".to_owned());
+    input.kind = ScheduleKind::Once;
+    input.cron.clear();
+    input.timezone = "UTC".to_owned();
+    input.next_run_at = SECOND.to_owned();
+    let created = database.schedules().create(&input)?;
+
+    let occurrence = database
+        .occurrences()
+        .claim_due_at(&created.id, SECOND, None, SECOND)?;
+
+    assert!(occurrence.is_some());
+    assert_eq!(
+        database
+            .schedules()
+            .get(&created.id)?
+            .map(|stored| stored.status),
+        Some(ScheduleStatus::Completed)
+    );
+    assert!(
+        database
+            .schedules()
+            .list_due("2027-01-01T00:00:00.000Z")?
+            .is_empty()
+    );
     Ok(())
 }
 
@@ -172,7 +213,7 @@ fn stores_unique_occurrences_and_renewable_worker_leases() -> Result<(), Box<dyn
     let occurrence = database.occurrences().claim_due_at(
         &created.id,
         "2026-02-01T16:00:00.000Z",
-        "2026-03-01T16:00:00.000Z",
+        Some("2026-03-01T16:00:00.000Z"),
         SECOND,
     )?;
     assert!(occurrence.is_some());
@@ -194,7 +235,7 @@ fn stores_unique_occurrences_and_renewable_worker_leases() -> Result<(), Box<dyn
             .claim_due_at(
                 &created.id,
                 "2026-03-01T16:00:00.000Z",
-                "2026-04-01T15:00:00.000Z",
+                Some("2026-04-01T15:00:00.000Z"),
                 SECOND,
             )?
             .is_none()

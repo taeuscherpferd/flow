@@ -3,7 +3,7 @@ use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 
 use crate::{PersistenceError, Result};
 
-pub const LATEST_MIGRATION_VERSION: i64 = 5;
+pub const LATEST_MIGRATION_VERSION: i64 = 6;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppliedMigration {
@@ -18,7 +18,7 @@ struct Migration {
     apply: fn(&Transaction<'_>) -> rusqlite::Result<()>,
 }
 
-const MIGRATIONS: [Migration; 5] = [
+const MIGRATIONS: [Migration; 6] = [
     Migration {
         version: 1,
         name: "workflow storage",
@@ -43,6 +43,11 @@ const MIGRATIONS: [Migration; 5] = [
         version: 5,
         name: "agent conversation storage",
         apply: create_conversation_storage,
+    },
+    Migration {
+        version: 6,
+        name: "one-shot schedule timing",
+        apply: ensure_schedule_kind,
     },
 ];
 
@@ -214,6 +219,7 @@ fn create_schedule_storage(transaction: &Transaction<'_>) -> rusqlite::Result<()
           agent_name TEXT NOT NULL,
           workflow_name TEXT NOT NULL,
           input_json TEXT NOT NULL,
+          schedule_kind TEXT NOT NULL DEFAULT 'cron',
           cron TEXT NOT NULL,
           timezone TEXT NOT NULL,
           package_fingerprint TEXT NOT NULL,
@@ -258,6 +264,15 @@ fn create_schedule_storage(transaction: &Transaction<'_>) -> rusqlite::Result<()
           created_at TEXT NOT NULL
         );
         ",
+    )
+}
+
+fn ensure_schedule_kind(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    ensure_column(
+        transaction,
+        "schedules",
+        "schedule_kind",
+        "TEXT NOT NULL DEFAULT 'cron'",
     )
 }
 

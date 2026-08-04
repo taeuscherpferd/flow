@@ -58,12 +58,14 @@ Schedule creation and reauthorization services include:
 - owning agent and workflow;
 - validated input;
 - project working directory;
-- IANA timezone and cron cadence;
+- exact one-shot timestamp or IANA timezone and cron cadence;
 - complete authorization fingerprint.
 
-The current CLI does not expose those creation/reauthorization services, so
-existing records must have been created by a compatible adapter or prior
-version. Fingerprint mismatch invalidates them before normal module evaluation.
+Applicable agents expose schedule creation through a self-managed model tool and
+an explicit CLI command. Both display the exact schedule confirmation and ask
+for approval before writing. Reauthorization is not exposed by the CLI.
+Fingerprint mismatch invalidates a due occurrence before normal module
+evaluation.
 
 ## Cancellation and subprocesses
 

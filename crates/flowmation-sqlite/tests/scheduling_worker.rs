@@ -10,8 +10,8 @@ use flowmation_application::scheduling::{
 };
 use flowmation_domain::ids::WorkflowRunId;
 use flowmation_domain::schedule::{
-    CreateScheduleInput, ScheduleOccurrence, ScheduleOccurrenceStatus, ScheduleRecord,
-    ScheduleStatus,
+    CreateScheduleInput, ScheduleKind, ScheduleOccurrence, ScheduleOccurrenceStatus,
+    ScheduleRecord, ScheduleStatus,
 };
 use flowmation_sqlite::{
     CreateWorkflowRun, OccurrenceUpdate, ScheduleOccurrenceStatus as PersistenceOccurrenceStatus,
@@ -166,6 +166,7 @@ async fn runs_one_catch_up_occurrence_records_trigger_and_recovers() -> Result<(
             agent_name: "main".to_owned(),
             workflow_name: "scheduled-report".to_owned(),
             input: json!(""),
+            kind: ScheduleKind::Cron,
             cron: "* * * * *".to_owned(),
             timezone: "UTC".to_owned(),
             package_fingerprint: "fingerprint".to_owned(),
@@ -242,6 +243,46 @@ async fn runs_one_catch_up_occurrence_records_trigger_and_recovers() -> Result<(
 }
 
 #[tokio::test]
+async fn one_shot_schedule_runs_once_and_becomes_completed() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let repository = Arc::new(SqliteApplicationRepository::open_global_dir(
+        directory.path(),
+    )?);
+    let schedule = ScheduleRepository::create(
+        repository.as_ref(),
+        &CreateScheduleInput {
+            project_dir: PathBuf::from("/project"),
+            agent_name: "main".to_owned(),
+            workflow_name: "scheduled-report".to_owned(),
+            input: json!(""),
+            kind: ScheduleKind::Once,
+            cron: String::new(),
+            timezone: "UTC".to_owned(),
+            package_fingerprint: "fingerprint".to_owned(),
+            now: Some(CREATED_AT.to_owned()),
+        },
+        timestamp("2026-07-25T12:01:00.000Z")?,
+    )?;
+    let worker = ScheduleWorker::new(
+        repository.clone(),
+        Arc::new(RecordingExecution {
+            global_dir: directory.path().to_path_buf(),
+        }),
+    );
+
+    assert!(worker.tick(timestamp("2026-07-25T12:10:00.000Z")?).await?);
+    assert!(worker.tick(timestamp("2026-07-25T12:20:00.000Z")?).await?);
+
+    let stored = ScheduleRepository::get(repository.as_ref(), &schedule.id)?
+        .ok_or("one-shot schedule disappeared")?;
+    assert_eq!(stored.status, ScheduleStatus::Completed);
+    let occurrences = ScheduleRepository::occurrences(repository.as_ref(), &schedule.id)?;
+    assert_eq!(occurrences.len(), 1);
+    assert_eq!(occurrences[0].status, ScheduleOccurrenceStatus::Completed);
+    Ok(())
+}
+
+#[tokio::test]
 async fn rejects_changed_source_before_evaluating_and_persists_invalidation()
 -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
@@ -255,6 +296,7 @@ async fn rejects_changed_source_before_evaluating_and_persists_invalidation()
             agent_name: "main".to_owned(),
             workflow_name: "scheduled-report".to_owned(),
             input: json!(""),
+            kind: ScheduleKind::Cron,
             cron: "* * * * *".to_owned(),
             timezone: "UTC".to_owned(),
             package_fingerprint: "approved".to_owned(),

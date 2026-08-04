@@ -219,6 +219,13 @@ Project model and application values override or extend global values
 according to the Rust merge rules. Project `AGENTS.md` follows the global
 instructions, while a project `SOUL.md` replaces the global soul.
 
+The main agent includes `create-skill`, `create-workflow`, and `create-schedule`
+skills for authoring and scheduling reusable project automation. Invoke them
+with `/create-skill <request>`, `/create-workflow <request>`, or
+`/create-schedule <request>`.
+Same-named skills under global or project `skills/` override the embedded
+versions; newly created resources are discovered after Flowmation restarts.
+
 ## Configured agents
 
 Agent packages live under:
@@ -283,9 +290,10 @@ legacy 5-second busy timeout, WAL mode, foreign-key enforcement, table and
 column names, JSON formats, status strings, timestamps, indexes, and schedule
 status trigger.
 
-Five ordered Rust migrations create or complete workflow storage, add
+Six ordered Rust migrations create or complete workflow storage, add
 agent/trigger metadata, create schedule storage, install the schedule-run
-trigger, and create conversation storage. Existing rows are not rewritten;
+trigger, create conversation storage, and add explicit cron/one-shot timing.
+Existing rows are not rewritten;
 historical runs default to `agent_name = 'main'` and a manual trigger. See
 [docs/migration.md](docs/migration.md).
 
@@ -308,6 +316,7 @@ The Rust REPL implements:
 - `/cancel <id>`
 - `/workflow-debug [on|off]`
 - `/schedules`
+- `/schedule create <json>`
 - `/schedule <id>`
 - `/schedule pause|resume|delete <id>`
 - `/exit` and `/quit`
@@ -324,9 +333,12 @@ slash-command completion, and the two-stage Ctrl+C behavior. Press Tab or Right
 Arrow at the end of the input to accept the suggested built-in, workflow, or
 skill command. Non-TTY stdin uses line-oriented input.
 
-Schedule creation and reauthorization exist as application services but are
-not registered as CLI/model tools. The CLI can manage records already present
-in the database.
+The coordinator and specialists whose tool policy includes `create_schedule`
+can create confirmed cron or one-shot workflow schedules with the model tool.
+The explicit `/schedule create <json>` command is also available to the user.
+The optional `agent` field defaults to the active agent; the coordinator can use
+it to target a specialist workflow. Schedule reauthorization remains an
+application service and is not exposed by the CLI.
 
 ## Schedule worker
 

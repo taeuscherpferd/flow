@@ -7,8 +7,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use flowmation_domain::cron::{CronExpression, validate_timezone};
 use flowmation_domain::ids::ScheduleId;
 use flowmation_domain::schedule::{
-    CreateScheduleInput, ScheduleOccurrence, ScheduleOccurrenceStatus, ScheduleRecord,
-    ScheduleStatus,
+    CreateScheduleInput, ScheduleKind, ScheduleOccurrence, ScheduleOccurrenceStatus,
+    ScheduleRecord, ScheduleStatus,
 };
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -25,9 +25,19 @@ pub struct ScheduleRequest {
     pub agent_name: String,
     pub workflow_name: String,
     pub input: Value,
-    pub cron: String,
-    pub timezone: Option<String>,
+    pub timing: ScheduleTiming,
     pub now: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug)]
+pub enum ScheduleTiming {
+    Cron {
+        expression: String,
+        timezone: Option<String>,
+    },
+    Once {
+        run_at: DateTime<Utc>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -91,14 +101,15 @@ impl ScheduleService {
     }
 
     pub fn preview_confirmation(&self, request: &ScheduleRequest) -> Result<String, String> {
-        let (input, _next_run_at) = self.prepare(request)?;
+        let (input, next_run_at) = self.prepare(request)?;
+        let next_run_at = next_run_at.to_rfc3339_opts(SecondsFormat::Millis, true);
+        let timing = confirmation_timing(input.kind, &input.timezone, &input.cron, &next_run_at);
         Ok(confirmation_fields(
             &input.agent_name,
             &input.workflow_name,
             &input.input,
             &input.project_dir,
-            &input.timezone,
-            &input.cron,
+            &timing,
             &input.package_fingerprint,
         ))
     }
@@ -120,7 +131,8 @@ impl ScheduleService {
     }
 
     pub fn pause(&self, id: &ScheduleId) -> Result<(), String> {
-        self.require_project_schedule(id)?;
+        let schedule = self.require_project_schedule(id)?;
+        require_transition(id, schedule.status, ScheduleStatus::Paused)?;
         self.repository
             .set_status(id, ScheduleStatus::Paused)
             .and_then(require_changed)
@@ -128,11 +140,7 @@ impl ScheduleService {
 
     pub fn resume(&self, id: &ScheduleId) -> Result<(), String> {
         let schedule = self.require_project_schedule(id)?;
-        if schedule.status == ScheduleStatus::NeedsReauthorization {
-            return Err(format!(
-                "Schedule \"{id}\" needs reauthorization because its agent package changed."
-            ));
-        }
+        require_transition(id, schedule.status, ScheduleStatus::Active)?;
         self.repository
             .set_status(id, ScheduleStatus::Active)
             .and_then(require_changed)
@@ -153,10 +161,16 @@ impl ScheduleService {
             .catalog
             .resolve(&schedule.agent_name, &schedule.workflow_name)?;
         self.catalog.validate_input(&workflow, &schedule.input)?;
-        let next_run_at = CronExpression::parse(&schedule.cron)
-            .map_err(|error| error.to_string())?
-            .next(now, &schedule.timezone)
-            .map_err(|error| error.to_string())?;
+        let next_run_at = match schedule.kind {
+            ScheduleKind::Cron => CronExpression::parse(&schedule.cron)
+                .map_err(|error| error.to_string())?
+                .next(now, &schedule.timezone)
+                .map_err(|error| error.to_string())?,
+            ScheduleKind::Once => schedule
+                .next_run_at
+                .parse::<DateTime<Utc>>()
+                .map_err(|error| error.to_string())?,
+        };
         let package_fingerprint = self
             .catalog
             .package_fingerprint(&schedule.agent_name, &workflow);
@@ -198,13 +212,18 @@ impl ScheduleService {
 
     #[must_use]
     pub fn confirmation(schedule: &ScheduleRecord) -> String {
+        let timing = confirmation_timing(
+            schedule.kind,
+            &schedule.timezone,
+            &schedule.cron,
+            &schedule.next_run_at,
+        );
         confirmation_fields(
             &schedule.agent_name,
             &schedule.workflow_name,
             &schedule.input,
             &schedule.project_dir,
-            &schedule.timezone,
-            &schedule.cron,
+            &timing,
             &schedule.package_fingerprint,
         )
     }
@@ -217,23 +236,42 @@ impl ScheduleService {
             .catalog
             .resolve(&request.agent_name, &request.workflow_name)?;
         self.catalog.validate_input(&workflow, &request.input)?;
-        let timezone = request
-            .timezone
-            .clone()
-            .unwrap_or_else(|| iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_owned()));
-        validate_timezone(&timezone).map_err(|error| error.to_string())?;
-        let cron = CronExpression::parse(&request.cron).map_err(|error| error.to_string())?;
         let now = request.now.unwrap_or_else(Utc::now);
-        let next_run_at = cron
-            .next(now, &timezone)
-            .map_err(|error| error.to_string())?;
+        let (kind, cron, timezone, next_run_at) = match &request.timing {
+            ScheduleTiming::Cron {
+                expression,
+                timezone,
+            } => {
+                let timezone = timezone.clone().unwrap_or_else(|| {
+                    iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_owned())
+                });
+                validate_timezone(&timezone).map_err(|error| error.to_string())?;
+                let cron = CronExpression::parse(expression).map_err(|error| error.to_string())?;
+                let next_run_at = cron
+                    .next(now, &timezone)
+                    .map_err(|error| error.to_string())?;
+                (
+                    ScheduleKind::Cron,
+                    cron.source().to_owned(),
+                    timezone,
+                    next_run_at,
+                )
+            }
+            ScheduleTiming::Once { run_at } => {
+                if *run_at <= now {
+                    return Err("One-shot schedule time must be in the future.".to_owned());
+                }
+                (ScheduleKind::Once, String::new(), "UTC".to_owned(), *run_at)
+            }
+        };
         Ok((
             CreateScheduleInput {
                 project_dir: self.project_dir.clone(),
                 agent_name: request.agent_name.clone(),
                 workflow_name: workflow.metadata.name.clone(),
                 input: request.input.clone(),
-                cron: cron.source().to_owned(),
+                kind,
+                cron,
                 timezone,
                 package_fingerprint: self
                     .catalog
@@ -258,21 +296,45 @@ fn require_changed(changed: bool) -> Result<(), String> {
     }
 }
 
+fn require_transition(
+    id: &ScheduleId,
+    current: ScheduleStatus,
+    next: ScheduleStatus,
+) -> Result<(), String> {
+    if current.can_transition_to(next) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Schedule \"{id}\" cannot transition from {current:?} to {next:?}."
+        ))
+    }
+}
+
 fn confirmation_fields(
     agent_name: &str,
     workflow_name: &str,
     input: &Value,
     project_dir: &Path,
-    timezone: &str,
-    cron: &str,
+    timing: &str,
     package_fingerprint: &str,
 ) -> String {
     format!(
         "Agent: {agent_name}\nWorkflow: {agent_name}/{workflow_name}\nInput: {input}\nWorking \
-         directory: {}\nTimezone: {timezone}\nCadence: {cron}\nPackage fingerprint: \
-         {package_fingerprint}",
+         directory: {}\n{timing}\nPackage fingerprint: {package_fingerprint}",
         project_dir.display()
     )
+}
+
+fn confirmation_timing(
+    kind: ScheduleKind,
+    timezone: &str,
+    cron: &str,
+    next_run_at: &str,
+) -> String {
+    match kind {
+        ScheduleKind::Cron => format!("Cadence: {cron}\nTimezone: {timezone}"),
+        ScheduleKind::Once => format!("Run once at: {next_run_at}"),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -309,7 +371,7 @@ pub trait ScheduleWorkerRepository: Send + Sync {
         &self,
         schedule: &ScheduleRecord,
         scheduled_for: DateTime<Utc>,
-        next_run_at: DateTime<Utc>,
+        next_run_at: Option<DateTime<Utc>>,
     ) -> Result<Option<ScheduleOccurrence>, String>;
     fn update_occurrence(
         &self,
@@ -391,10 +453,15 @@ impl ScheduleWorker {
                 .next_run_at
                 .parse::<DateTime<Utc>>()
                 .map_err(|error| error.to_string())?;
-            let next_run_at = CronExpression::parse(&schedule.cron)
-                .map_err(|error| error.to_string())?
-                .next(now, &schedule.timezone)
-                .map_err(|error| error.to_string())?;
+            let next_run_at = match schedule.kind {
+                ScheduleKind::Cron => Some(
+                    CronExpression::parse(&schedule.cron)
+                        .map_err(|error| error.to_string())?
+                        .next(now, &schedule.timezone)
+                        .map_err(|error| error.to_string())?,
+                ),
+                ScheduleKind::Once => None,
+            };
             if let Some(occurrence) =
                 self.repository
                     .claim(&schedule, scheduled_for, next_run_at)?

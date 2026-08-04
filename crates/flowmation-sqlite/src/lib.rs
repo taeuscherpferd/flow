@@ -15,7 +15,7 @@ pub use error::{PersistenceError, Result};
 pub use migrations::{AppliedMigration, LATEST_MIGRATION_VERSION};
 pub use records::{
     AgentSessionRecord, ChatRole, CreateSchedule, CreateWorkflowRun, EffectRecord,
-    HumanResponseRecord, NewWorkflowStep, OccurrenceUpdate, ScheduleNotification,
+    HumanResponseRecord, NewWorkflowStep, OccurrenceUpdate, ScheduleKind, ScheduleNotification,
     ScheduleNotificationKind, ScheduleOccurrence, ScheduleOccurrenceStatus, ScheduleRecord,
     ScheduleStatus, StoredAgentConversation, StoredChatMessage, StoredToolCall,
     WorkflowPresentation, WorkflowRunDetails, WorkflowRunStatus, WorkflowRunSummary, WorkflowStep,

@@ -124,6 +124,14 @@ impl AgentSkillCatalog {
                 }
             }
         } else if let Some(package) = packages.get(active_agent_name) {
+            if package
+                .definition
+                .tools
+                .contains(&AgentToolName::CreateSchedule)
+                && let Some(skill) = root_skills.record("create-schedule")
+            {
+                records.insert("create-schedule".to_owned(), skill.clone());
+            }
             for skill in &package.skills {
                 let name = skill.frontmatter.name.clone();
                 records.insert(format!("{active_agent_name}/{name}"), skill.clone());
@@ -185,7 +193,7 @@ impl AgentManager {
             config.skills_config.clone(),
         );
         packages.load().await?;
-        let mut main_skills = SkillsService::new(config.skills_config.clone());
+        let mut main_skills = SkillsService::with_builtin_skills(config.skills_config.clone())?;
         let _warnings = main_skills
             .load(&[
                 SkillScanRoot {
@@ -506,6 +514,7 @@ fn build_agent(
                 AgentToolName::RunCommand,
                 AgentToolName::LoadSkill,
                 AgentToolName::RunWorkflow,
+                AgentToolName::CreateSchedule,
             ],
             soul: config.soul.clone(),
             instructions: config.agents_instructions.clone(),
@@ -1007,20 +1016,28 @@ mod tests {
         assert_eq!(
             manager.list_skill_names(),
             vec![
+                "create-schedule",
+                "create-skill",
+                "create-workflow",
                 "finance/forecast",
                 "finance/reconcile",
                 "forecast",
                 "legal/reconcile",
+                "main/create-schedule",
+                "main/create-skill",
+                "main/create-workflow",
                 "main/report",
                 "report",
             ]
         );
+        assert!(manager.load_skill("create-skill"));
         assert!(manager.load_skill("finance/reconcile"));
         assert!(!manager.load_skill("reconcile"));
         assert!(manager.switch_agent("finance")?);
         assert_eq!(
             manager.list_skill_names(),
             vec![
+                "create-schedule",
                 "finance/forecast",
                 "finance/reconcile",
                 "forecast",
@@ -1291,7 +1308,8 @@ mod tests {
         tokio::fs::create_dir_all(&directory).await?;
         tokio::fs::write(
             directory.join("AGENT.yaml"),
-            "version: 1\nname: finance\ndescription: Manages finance\nmodel: finance\n",
+            "version: 1\nname: finance\ndescription: Manages finance\nmodel: finance\ntools:\n  \
+             - read_file\n  - load_skill\n  - create_schedule\n",
         )
         .await?;
         tokio::fs::write(directory.join("SOUL.md"), "You are finance.").await?;

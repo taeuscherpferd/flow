@@ -11,6 +11,8 @@ use flowmation_domain::fingerprint::{fingerprint_directory, list_regular_files};
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::builtin_skills::BUILTIN_SKILLS;
+
 #[derive(Debug, Error)]
 pub enum RegistryError {
     #[error("{0}")]
@@ -32,6 +34,7 @@ pub struct SkillScanRoot {
 #[derive(Clone, Debug, Default)]
 pub struct SkillsService {
     records: BTreeMap<String, SkillRecord>,
+    builtin_records: BTreeMap<String, SkillRecord>,
     config: SkillsConfig,
 }
 
@@ -40,8 +43,31 @@ impl SkillsService {
     pub fn new(config: SkillsConfig) -> Self {
         Self {
             records: BTreeMap::new(),
+            builtin_records: BTreeMap::new(),
             config,
         }
+    }
+
+    pub fn with_builtin_skills(config: SkillsConfig) -> Result<Self, RegistryError> {
+        let mut service = Self::new(config);
+        for source in BUILTIN_SKILLS {
+            let (frontmatter, body) = parse_skill(source.raw)?;
+            if frontmatter.name != source.name {
+                return Err(RegistryError::Invalid(format!(
+                    "built-in skill name \"{}\" does not match \"{}\"",
+                    frontmatter.name, source.name
+                )));
+            }
+            let record = service.build_record(
+                frontmatter,
+                body,
+                PathBuf::from("builtin-skills").join(source.name),
+                PackageSource::Global,
+            );
+            service.records.insert(source.name.to_owned(), record);
+        }
+        service.builtin_records.clone_from(&service.records);
+        Ok(service)
     }
 
     #[must_use]
@@ -51,12 +77,13 @@ impl SkillsService {
                 .into_iter()
                 .map(|record| (record.frontmatter.name.clone(), record))
                 .collect(),
+            builtin_records: BTreeMap::new(),
             config: BTreeMap::new(),
         }
     }
 
     pub async fn load(&mut self, roots: &[SkillScanRoot]) -> Vec<String> {
-        self.records.clear();
+        self.records.clone_from(&self.builtin_records);
         let mut warnings = Vec::new();
         for root in roots {
             if let Err(error) = self.scan(root).await {
@@ -86,32 +113,42 @@ impl SkillsService {
                 Err(error) => return Err(error.into()),
             };
             let (frontmatter, body) = parse_skill(&raw)?;
-            let expected_config_vars = frontmatter
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("flowmation"))
-                .cloned()
-                .and_then(|value| serde_json::from_value::<FlowmationSkillMetadata>(value).ok());
-            let rendered_body = render_skill_body(
-                body.trim(),
-                self.config.get(&frontmatter.name),
-                expected_config_vars.as_ref(),
-            );
-            self.records.insert(
-                frontmatter.name.clone(),
-                SkillRecord {
-                    frontmatter,
-                    body: body.trim().to_owned(),
-                    rendered_body,
-                    expected_config_vars,
-                    dir: entry.path(),
-                    source: root.source,
-                    agent_name: None,
-                    resource_id: None,
-                },
-            );
+            let name = frontmatter.name.clone();
+            let record = self.build_record(frontmatter, body, entry.path(), root.source);
+            self.records.insert(name, record);
         }
         Ok(())
+    }
+
+    fn build_record(
+        &self,
+        frontmatter: SkillFrontmatter,
+        body: String,
+        dir: PathBuf,
+        source: PackageSource,
+    ) -> SkillRecord {
+        let expected_config_vars = frontmatter
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("flowmation"))
+            .cloned()
+            .and_then(|value| serde_json::from_value::<FlowmationSkillMetadata>(value).ok());
+        let body = body.trim().to_owned();
+        let rendered_body = render_skill_body(
+            &body,
+            self.config.get(&frontmatter.name),
+            expected_config_vars.as_ref(),
+        );
+        SkillRecord {
+            frontmatter,
+            body,
+            rendered_body,
+            expected_config_vars,
+            dir,
+            source,
+            agent_name: None,
+            resource_id: None,
+        }
     }
 
     #[must_use]
@@ -142,6 +179,11 @@ impl SkillsService {
         self.records
             .get(name)
             .map(|record| record.rendered_body.as_str())
+    }
+
+    #[must_use]
+    pub fn record(&self, name: &str) -> Option<&SkillRecord> {
+        self.records.get(name)
     }
 }
 
@@ -528,10 +570,55 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
+    use flowmation_domain::agent::PackageSource;
     use tempfile::tempdir;
 
-    use super::{AgentPackageRegistry, build_system_prompt};
+    use super::{AgentPackageRegistry, SkillScanRoot, SkillsService, build_system_prompt};
     use flowmation_domain::config::{ModelConfig, ModelsConfig, ProviderConfig, ProviderKind};
+
+    #[tokio::test]
+    async fn built_in_skills_are_available_and_follow_override_precedence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let global = root.path().join("global/create-skill");
+        let project = root.path().join("project/create-skill");
+        tokio::fs::create_dir_all(&global).await?;
+        tokio::fs::create_dir_all(&project).await?;
+        tokio::fs::write(
+            global.join("SKILL.md"),
+            "---\nname: create-skill\ndescription: Global override\n---\n\nglobal body",
+        )
+        .await?;
+        tokio::fs::write(
+            project.join("SKILL.md"),
+            "---\nname: create-skill\ndescription: Project override\n---\n\nproject body",
+        )
+        .await?;
+
+        let mut skills = SkillsService::with_builtin_skills(BTreeMap::new())?;
+        assert!(skills.body("create-schedule").is_some());
+        assert!(skills.body("create-skill").is_some());
+        assert!(skills.body("create-workflow").is_some());
+
+        let warnings = skills
+            .load(&[
+                SkillScanRoot {
+                    directory: root.path().join("global"),
+                    source: PackageSource::Global,
+                },
+                SkillScanRoot {
+                    directory: root.path().join("project"),
+                    source: PackageSource::Project,
+                },
+            ])
+            .await;
+
+        assert!(warnings.is_empty());
+        assert_eq!(skills.body("create-skill"), Some("project body"));
+        assert!(skills.body("create-workflow").is_some());
+        assert_eq!(skills.list().len(), 3);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn project_agent_packages_replace_global_packages_atomically()

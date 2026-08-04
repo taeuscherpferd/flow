@@ -8,15 +8,16 @@ use flowmation_application::scheduling::{
 };
 use flowmation_domain::ids::{ScheduleId, ScheduleOccurrenceId, WorkflowRunId};
 use flowmation_domain::schedule::{
-    CreateScheduleInput, ScheduleOccurrence as ApplicationOccurrence,
+    CreateScheduleInput, ScheduleKind as ApplicationScheduleKind,
+    ScheduleOccurrence as ApplicationOccurrence,
     ScheduleOccurrenceStatus as ApplicationOccurrenceStatus, ScheduleRecord as ApplicationSchedule,
     ScheduleStatus as ApplicationScheduleStatus,
 };
 
 use super::SqliteApplicationRepository;
 use crate::{
-    CreateSchedule, OccurrenceUpdate, ScheduleOccurrence, ScheduleOccurrenceStatus, ScheduleRecord,
-    ScheduleStatus,
+    CreateSchedule, OccurrenceUpdate, ScheduleKind, ScheduleOccurrence, ScheduleOccurrenceStatus,
+    ScheduleRecord, ScheduleStatus,
 };
 
 impl ApplicationScheduleRepository for SqliteApplicationRepository {
@@ -31,6 +32,7 @@ impl ApplicationScheduleRepository for SqliteApplicationRepository {
             agent_name: input.agent_name.clone(),
             workflow_name: input.workflow_name.clone(),
             input: input.input.clone(),
+            kind: to_persistence_schedule_kind(input.kind),
             cron: input.cron.clone(),
             timezone: input.timezone.clone(),
             package_fingerprint: input.package_fingerprint.clone(),
@@ -154,14 +156,14 @@ impl ScheduleWorkerRepository for SqliteApplicationRepository {
         &self,
         schedule: &ApplicationSchedule,
         scheduled_for: DateTime<Utc>,
-        next_run_at: DateTime<Utc>,
+        next_run_at: Option<DateTime<Utc>>,
     ) -> Result<Option<ApplicationOccurrence>, String> {
         self.database()?
             .occurrences()
             .claim_due(
                 schedule.id.as_str(),
                 &timestamp(scheduled_for),
-                &timestamp(next_run_at),
+                next_run_at.map(timestamp).as_deref(),
             )
             .map_err(|error| error.to_string())?
             .map(to_application_occurrence)
@@ -214,6 +216,10 @@ fn to_application_schedule(record: ScheduleRecord) -> Result<ApplicationSchedule
         agent_name: record.agent_name,
         workflow_name: record.workflow_name,
         input: record.input,
+        kind: match record.kind {
+            ScheduleKind::Cron => ApplicationScheduleKind::Cron,
+            ScheduleKind::Once => ApplicationScheduleKind::Once,
+        },
         cron: record.cron,
         timezone: record.timezone,
         package_fingerprint: record.package_fingerprint,
@@ -221,6 +227,7 @@ fn to_application_schedule(record: ScheduleRecord) -> Result<ApplicationSchedule
             ScheduleStatus::Active => ApplicationScheduleStatus::Active,
             ScheduleStatus::Paused => ApplicationScheduleStatus::Paused,
             ScheduleStatus::NeedsReauthorization => ApplicationScheduleStatus::NeedsReauthorization,
+            ScheduleStatus::Completed => ApplicationScheduleStatus::Completed,
         },
         next_run_at: record.next_run_at,
         created_at: record.created_at,
@@ -259,6 +266,14 @@ const fn to_persistence_schedule_status(status: ApplicationScheduleStatus) -> Sc
         ApplicationScheduleStatus::Active => ScheduleStatus::Active,
         ApplicationScheduleStatus::Paused => ScheduleStatus::Paused,
         ApplicationScheduleStatus::NeedsReauthorization => ScheduleStatus::NeedsReauthorization,
+        ApplicationScheduleStatus::Completed => ScheduleStatus::Completed,
+    }
+}
+
+const fn to_persistence_schedule_kind(kind: ApplicationScheduleKind) -> ScheduleKind {
+    match kind {
+        ApplicationScheduleKind::Cron => ScheduleKind::Cron,
+        ApplicationScheduleKind::Once => ScheduleKind::Once,
     }
 }
 

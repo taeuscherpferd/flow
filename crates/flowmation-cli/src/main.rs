@@ -4,6 +4,7 @@ mod model_setup;
 #[cfg(test)]
 mod permission_prompt;
 mod provider_factory;
+mod schedule_commands;
 mod spinner;
 mod worker;
 mod workflow_commands;
@@ -19,10 +20,11 @@ use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use flowmation_application::scheduling::ScheduleRepository;
 use flowmation_application::{
-    AgentManager, AuthorizationDecision, AuthorizationPolicy, ConfigService, FixedPermissionBroker,
-    HumanRequestBroker, ManagedWorkflowAgentRuntime, StandardAuthorizationPolicy,
-    WorkflowAgentRuntime, WorkflowCallbackServices, WorkflowConfirmation, WorkflowDurability,
-    WorkflowLogSink, WorkflowRegistry, WorkflowRegistryRoot, WorkflowRunner, WorkflowToolRuntime,
+    AgentManager, AuthorizationDecision, AuthorizationPolicy, ConfigService, CreateScheduleTool,
+    FixedPermissionBroker, HumanRequestBroker, ManagedWorkflowAgentRuntime,
+    StandardAuthorizationPolicy, WorkflowAgentRuntime, WorkflowCallbackServices,
+    WorkflowConfirmation, WorkflowDurability, WorkflowLogSink, WorkflowRegistry,
+    WorkflowRegistryRoot, WorkflowRunner, WorkflowToolRuntime,
 };
 use flowmation_codex::{
     CodexAccountStatus, CodexModel, CodexProvider, OPENAI_SUBSCRIPTION_PROVIDER_NAME,
@@ -30,6 +32,7 @@ use flowmation_codex::{
 use flowmation_domain::agent::PackageSource;
 use flowmation_domain::ids::ScheduleId;
 use flowmation_domain::input_history::{InputHistory, InputHistoryStore};
+use flowmation_domain::schedule::ScheduleKind;
 use flowmation_sqlite::{
     SqliteApplicationRepository, WorkflowPresentation as StoredWorkflowPresentation,
     WorkflowRunDetails, WorkflowRunStatus,
@@ -44,6 +47,7 @@ use uuid::Uuid;
 use crate::command::{BUILTIN_COMMANDS, HELP_TEXT, ReplCommand, parse_repl_line};
 use crate::model_setup::{ModelSetupIo, ModelSetupResult, ModelSetupService, format_openai_model};
 use crate::provider_factory::create_model_providers;
+use crate::schedule_commands::{CliScheduleContext, CliScheduleRuntime};
 use crate::spinner::Spinner;
 use crate::workflow_commands::WorkflowRunScope;
 
@@ -215,6 +219,7 @@ impl Runtime {
                 runner,
             });
         }
+        let (agent_name, permitted_agent_names) = self.schedule_agent_context().await;
         let workflows = self
             .workflows
             .as_ref()
@@ -227,18 +232,35 @@ impl Runtime {
             .into_iter()
             .cloned()
             .collect::<Vec<_>>();
-        let agent_name = self.manager.lock().await.active_name().to_owned();
         let tool_runtime: Arc<dyn WorkflowToolRuntime> = Arc::new(CliWorkflowToolRuntime {
             registry: Arc::clone(&workflows.registry),
             runner: Arc::clone(&workflows.runner),
             durability: self.repository.clone(),
             project_dir: self.project_root(),
-            agent_name,
+            agent_name: agent_name.clone(),
         });
-        self.manager
-            .lock()
-            .await
-            .configure_workflows(&records, tool_runtime);
+        let schedule_runtime = Arc::new(CliScheduleRuntime::new(
+            Arc::clone(&workflows.registry),
+            workflows.host.clone(),
+            Arc::clone(&self.repository),
+            CliScheduleContext {
+                global_dir: self.config.global_dir.clone(),
+                project_config_dir: self.config.project_dir.clone(),
+                project_dir: self.project_root(),
+                active_agent_name: agent_name.clone(),
+                permitted_agent_names,
+            },
+            Arc::new(TerminalHumanBroker),
+        ));
+        let schedule_workflows = schedule_runtime.available_workflows().await?;
+        let mut manager = self.manager.lock().await;
+        manager.configure_workflows(&records, tool_runtime);
+        manager.register_direct_tool(Arc::new(CreateScheduleTool::new(
+            agent_name,
+            &schedule_workflows,
+            schedule_runtime,
+        )));
+        drop(manager);
         self.workflows
             .as_mut()
             .ok_or_else(|| "workflow runtime did not initialize".to_owned())
@@ -258,6 +280,45 @@ impl Runtime {
             .parent()
             .unwrap_or(&self.config.project_dir)
             .to_path_buf()
+    }
+
+    async fn schedule_runtime(&mut self) -> Result<Arc<CliScheduleRuntime>, String> {
+        self.ensure_workflows().await?;
+        let (agent_name, permitted_agent_names) = self.schedule_agent_context().await;
+        let project_dir = self.project_root();
+        let repository = Arc::clone(&self.repository);
+        let workflows = self
+            .workflows
+            .as_ref()
+            .ok_or_else(|| "workflow runtime did not initialize".to_owned())?;
+        Ok(Arc::new(CliScheduleRuntime::new(
+            Arc::clone(&workflows.registry),
+            workflows.host.clone(),
+            repository,
+            CliScheduleContext {
+                global_dir: self.config.global_dir.clone(),
+                project_config_dir: self.config.project_dir.clone(),
+                project_dir,
+                active_agent_name: agent_name,
+                permitted_agent_names,
+            },
+            Arc::new(TerminalHumanBroker),
+        )))
+    }
+
+    async fn schedule_agent_context(&self) -> (String, Vec<String>) {
+        let manager = self.manager.lock().await;
+        let active = manager.active_name().to_owned();
+        let permitted = if active == "main" {
+            manager
+                .list_agents()
+                .into_iter()
+                .map(|agent| agent.name)
+                .collect()
+        } else {
+            vec![active.clone()]
+        };
+        (active, permitted)
     }
 
     async fn shutdown(&self) {
@@ -587,22 +648,21 @@ async fn run_repl() -> Result<(), String> {
                     .unwrap_or(&active.config.project_dir);
                 for schedule in ScheduleRepository::list(active.repository.as_ref(), project_dir)? {
                     println!(
-                        "  {} — {}/{} {} {} [{:?}]",
+                        "  {} — {}/{} {} [{:?}]",
                         schedule.id,
                         schedule.agent_name,
                         schedule.workflow_name,
-                        schedule.cron,
-                        schedule.timezone,
+                        schedule_timing(&schedule),
                         schedule.status
                     );
                 }
             }
             ReplCommand::Schedule(command) => {
-                let Some(active) = runtime.as_ref() else {
+                let Some(active) = runtime.as_mut() else {
                     println!("{WELCOME_TEXT}");
                     continue;
                 };
-                handle_schedule_command(active, &command)?;
+                handle_schedule_command(active, &command).await?;
             }
         }
     }
@@ -863,7 +923,20 @@ fn pretty_value(value: &Value) -> Result<String, String> {
     serde_json::to_string_pretty(value).map_err(|error| error.to_string())
 }
 
-fn handle_schedule_command(runtime: &Runtime, command: &str) -> Result<(), String> {
+async fn handle_schedule_command(runtime: &mut Runtime, command: &str) -> Result<(), String> {
+    if let Some(request) = command.strip_prefix("create ") {
+        let schedule = runtime
+            .schedule_runtime()
+            .await?
+            .create_from_json(request, &CancellationToken::new())
+            .await?;
+        println!(
+            "Created schedule {} — {}.",
+            schedule.id,
+            schedule_timing(&schedule)
+        );
+        return Ok(());
+    }
     let parts = command.split_whitespace().collect::<Vec<_>>();
     match parts.as_slice() {
         [id] => {
@@ -881,9 +954,18 @@ fn handle_schedule_command(runtime: &Runtime, command: &str) -> Result<(), Strin
             } else {
                 flowmation_domain::schedule::ScheduleStatus::Active
             };
-            if !ScheduleRepository::set_status(runtime.repository.as_ref(), &id, status)? {
+            let Some(schedule) = ScheduleRepository::get(runtime.repository.as_ref(), &id)? else {
                 println!("Unknown schedule \"{id}\".");
+                return Ok(());
+            };
+            if !schedule.status.can_transition_to(status) {
+                println!(
+                    "Schedule \"{id}\" cannot transition from {:?} to {:?}.",
+                    schedule.status, status
+                );
+                return Ok(());
             }
+            ScheduleRepository::set_status(runtime.repository.as_ref(), &id, status)?;
         }
         ["delete", id] => {
             let id = ScheduleId::new(*id).map_err(|error| error.to_string())?;
@@ -891,9 +973,16 @@ fn handle_schedule_command(runtime: &Runtime, command: &str) -> Result<(), Strin
                 println!("Unknown schedule \"{id}\".");
             }
         }
-        _ => println!("Usage: /schedule <id> | pause|resume|delete <id>"),
+        _ => println!("Usage: /schedule create <json> | <id> | pause|resume|delete <id>"),
     }
     Ok(())
+}
+
+fn schedule_timing(schedule: &flowmation_domain::schedule::ScheduleRecord) -> String {
+    match schedule.kind {
+        ScheduleKind::Cron => format!("cron {} ({})", schedule.cron, schedule.timezone),
+        ScheduleKind::Once => format!("once at {}", schedule.next_run_at),
+    }
 }
 
 async fn setup_first_model(service: &ConfigService) -> Result<bool, String> {

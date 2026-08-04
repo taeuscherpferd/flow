@@ -1,7 +1,7 @@
 use rusqlite::Row;
 
 use crate::{
-    Result, ScheduleNotification, ScheduleNotificationKind, ScheduleOccurrence,
+    Result, ScheduleKind, ScheduleNotification, ScheduleNotificationKind, ScheduleOccurrence,
     ScheduleOccurrenceStatus, ScheduleRecord, ScheduleStatus,
 };
 
@@ -11,6 +11,7 @@ pub(super) struct RawSchedule {
     pub agent_name: String,
     pub workflow_name: String,
     pub input_json: String,
+    pub schedule_kind: String,
     pub cron: String,
     pub timezone: String,
     pub package_fingerprint: String,
@@ -27,6 +28,7 @@ pub(super) fn raw_schedule(row: &Row<'_>) -> rusqlite::Result<RawSchedule> {
         agent_name: row.get("agent_name")?,
         workflow_name: row.get("workflow_name")?,
         input_json: row.get("input_json")?,
+        schedule_kind: row.get("schedule_kind")?,
         cron: row.get("cron")?,
         timezone: row.get("timezone")?,
         package_fingerprint: row.get("package_fingerprint")?,
@@ -44,6 +46,7 @@ pub(super) fn map_schedule(raw: RawSchedule) -> Result<ScheduleRecord> {
         agent_name: raw.agent_name,
         workflow_name: raw.workflow_name,
         input: serde_json::from_str(&raw.input_json)?,
+        kind: ScheduleKind::parse(&raw.schedule_kind)?,
         cron: raw.cron,
         timezone: raw.timezone,
         package_fingerprint: raw.package_fingerprint,

@@ -21,7 +21,7 @@ impl<'connection> OccurrenceRepository<'connection> {
         &mut self,
         schedule_id: &str,
         scheduled_for: &str,
-        next_run_at: &str,
+        next_run_at: Option<&str>,
     ) -> Result<Option<ScheduleOccurrence>> {
         self.claim_due_at(schedule_id, scheduled_for, next_run_at, &now())
     }
@@ -30,7 +30,7 @@ impl<'connection> OccurrenceRepository<'connection> {
         &mut self,
         schedule_id: &str,
         scheduled_for: &str,
-        next_run_at: &str,
+        next_run_at: Option<&str>,
         updated_at: &str,
     ) -> Result<Option<ScheduleOccurrence>> {
         let transaction = self
@@ -51,10 +51,16 @@ impl<'connection> OccurrenceRepository<'connection> {
             error,
             updated_at,
         )?;
-        transaction.execute(
-            "UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ?",
-            params![next_run_at, updated_at, schedule_id],
-        )?;
+        match next_run_at {
+            Some(next_run_at) => transaction.execute(
+                "UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ?",
+                params![next_run_at, updated_at, schedule_id],
+            )?,
+            None => transaction.execute(
+                "UPDATE schedules SET status = 'completed', updated_at = ? WHERE id = ?",
+                params![updated_at, schedule_id],
+            )?,
+        };
         transaction.commit()?;
         if status != ScheduleOccurrenceStatus::Pending {
             return Ok(None);

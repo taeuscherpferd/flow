@@ -23,15 +23,16 @@ impl<'connection> ScheduleRepository<'connection> {
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         self.connection.execute(
             "INSERT INTO schedules (
-               id, project_dir, agent_name, workflow_name, input_json, cron,
+               id, project_dir, agent_name, workflow_name, input_json, schedule_kind, cron,
                timezone, package_fingerprint, status, next_run_at, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)",
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)",
             params![
                 id,
                 input.project_dir,
                 input.agent_name,
                 input.workflow_name,
                 serde_json::to_string(&input.input)?,
+                input.kind.as_str(),
                 input.cron,
                 input.timezone,
                 input.package_fingerprint,

@@ -10,7 +10,9 @@ use flowmation_application::workflow::{DurableStepKind, WorkflowDurability, Work
 use flowmation_application::{ChatMessage, ChatRole, ConversationRepository, StoredConversation};
 use flowmation_domain::agent::{AgentExecutionMode, AgentSessionRecord, PackageSource};
 use flowmation_domain::ids::AgentSessionId;
-use flowmation_domain::schedule::{CreateScheduleInput, ScheduleOccurrenceStatus, ScheduleStatus};
+use flowmation_domain::schedule::{
+    CreateScheduleInput, ScheduleKind, ScheduleOccurrenceStatus, ScheduleStatus,
+};
 use flowmation_sqlite::{SqliteApplicationRepository, SqliteDatabase};
 use flowmation_workflow_host::protocol::{
     AgentInvocationPolicy, WorkflowMetadata, WorkflowPresentation,
@@ -144,6 +146,7 @@ fn schedule_traits_share_occurrences_and_worker_leases() -> Result<(), Box<dyn E
             agent_name: "finance".to_owned(),
             workflow_name: "report".to_owned(),
             input: json!(""),
+            kind: ScheduleKind::Cron,
             cron: "* * * * *".to_owned(),
             timezone: "UTC".to_owned(),
             package_fingerprint: "fingerprint".to_owned(),
@@ -168,7 +171,7 @@ fn schedule_traits_share_occurrences_and_worker_leases() -> Result<(), Box<dyn E
         Duration::from_secs(30),
     )?);
 
-    let occurrence = ScheduleWorkerRepository::claim(&repository, &schedule, next, later)?
+    let occurrence = ScheduleWorkerRepository::claim(&repository, &schedule, next, Some(later))?
         .ok_or("occurrence was not claimed")?;
     ScheduleWorkerRepository::update_occurrence(
         &repository,
