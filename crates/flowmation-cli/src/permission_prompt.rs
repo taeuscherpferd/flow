@@ -61,9 +61,8 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use flowmation_application::{
-        AuthorizationDecision, PermissionBroker, PermissionRequest, ToolEffect,
-    };
+    use flowmation_application::{AuthorizationDecision, PermissionBroker, PermissionRequest};
+    use flowmation_domain::tool::{ToolEffect, ToolPermissionMode};
     use serde_json::Map;
     use tokio::sync::{Mutex, mpsc, oneshot};
 
@@ -106,7 +105,7 @@ mod tests {
             tool_name: name.to_owned(),
             arguments: Map::new(),
             effect: ToolEffect::External,
-            permission_mode: flowmation_application::ToolPermissionMode::Effect,
+            permission_mode: ToolPermissionMode::Effect,
             execution_mode: flowmation_application::ExecutionMode::Direct,
         }
     }

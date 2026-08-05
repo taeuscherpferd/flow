@@ -6,11 +6,12 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use flowmation_domain::chat::{JsonSchema, JsonSchemaProperty, JsonSchemaType, JsonValueType};
 use flowmation_domain::schedule::ScheduleRecord;
+use flowmation_domain::tool::{ToolEffect, ToolPermissionMode, ToolResult};
 use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::scheduling::{ScheduleRequest, ScheduleTiming};
-use crate::tool::{Tool, ToolEffect, ToolExecutionContext, ToolPermissionMode, ToolResult};
+use crate::tool::{Tool, ToolExecutionContext};
 use crate::workflow::WorkflowRecord;
 
 #[async_trait]

@@ -2,9 +2,10 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use flowmation_domain::tool::{ToolEffect, ToolPermissionMode};
 use serde_json::{Map, Value};
 
-use crate::tool::{ExecutionMode, ToolEffect, ToolPermissionMode};
+use crate::tool::ExecutionMode;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthorizationDecision {
@@ -93,7 +94,8 @@ mod tests {
         AuthorizationDecision, AuthorizationPolicy, FixedPermissionBroker, PermissionRequest,
         StandardAuthorizationPolicy,
     };
-    use crate::tool::{ExecutionMode, ToolEffect, ToolPermissionMode};
+    use crate::tool::ExecutionMode;
+    use flowmation_domain::tool::{ToolEffect, ToolPermissionMode};
 
     fn request(
         effect: ToolEffect,

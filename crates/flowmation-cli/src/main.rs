@@ -1268,9 +1268,8 @@ fn default_database_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use flowmation_application::{
-        AuthorizationDecision, ExecutionMode, PermissionRequest, ToolEffect, ToolPermissionMode,
-    };
+    use flowmation_application::{AuthorizationDecision, ExecutionMode, PermissionRequest};
+    use flowmation_domain::tool::{ToolEffect, ToolPermissionMode};
     use serde_json::Map;
 
     use super::interactive_authorization;

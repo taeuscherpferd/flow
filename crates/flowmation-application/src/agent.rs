@@ -408,8 +408,9 @@ mod tests {
     };
     use crate::tool::{
         EchoTool, EmptySecretsProvider, ExecutionMode, Tool, ToolExecutionContext, ToolRegistry,
-        ToolResult, object_schema,
+        object_schema,
     };
+    use flowmation_domain::tool::ToolResult;
     use tokio_util::sync::CancellationToken;
 
     #[derive(Debug)]

@@ -11,6 +11,7 @@ use flowmation_domain::agent::{
 use flowmation_domain::chat::{ChatMessage, ChatRole};
 use flowmation_domain::config::ResolvedConfig;
 use flowmation_domain::ids::AgentSessionId;
+use flowmation_domain::tool::{ToolEffect, ToolResult};
 use serde_json::{Map, Value};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -24,7 +25,6 @@ use crate::registry::{
 };
 use crate::tool::{
     EmptySecretsProvider, ExecutionMode, SecretsProvider, Tool, ToolExecutionContext, ToolRegistry,
-    ToolResult,
 };
 use crate::workflow::{WorkflowAgentRuntime, WorkflowRecord};
 use crate::workflow_tool::{RunWorkflowTool, WorkflowToolRuntime, build_workflow_system_context};
@@ -793,8 +793,8 @@ impl Tool for LoadSkillTool {
         )
     }
 
-    fn effect(&self) -> crate::tool::ToolEffect {
-        crate::tool::ToolEffect::Read
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::Read
     }
 
     async fn execute(
@@ -851,7 +851,8 @@ mod tests {
         ChatCompletionRequest, ChatCompletionResult, ChatMessage, ChatRole, ModelProvider,
         ProviderError,
     };
-    use crate::tool::{Tool, ToolExecutionContext, ToolResult, object_schema};
+    use crate::tool::{Tool, ToolExecutionContext, object_schema};
+    use flowmation_domain::tool::ToolResult;
 
     #[derive(Debug, Default)]
     struct RecordingProvider {

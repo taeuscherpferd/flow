@@ -18,6 +18,7 @@ use flowmation_application::{
 use flowmation_domain::agent::PackageSource;
 use flowmation_domain::fingerprint::fingerprint_directory;
 use flowmation_domain::schedule::{ScheduleOccurrence, ScheduleOccurrenceStatus, ScheduleRecord};
+use flowmation_domain::tool::{ToolEffect, ToolPermissionMode};
 use flowmation_sqlite::{SqliteApplicationRepository, SqliteDatabase};
 use flowmation_workflow_host::protocol::HumanCallback;
 use flowmation_workflow_host::{WorkflowHost, WorkflowHostConfig};
@@ -313,8 +314,8 @@ struct ScheduledAuthorizationPolicy;
 #[async_trait]
 impl AuthorizationPolicy for ScheduledAuthorizationPolicy {
     async fn authorize(&self, request: PermissionRequest) -> AuthorizationDecision {
-        if request.effect == flowmation_application::ToolEffect::Read
-            && request.permission_mode == flowmation_application::ToolPermissionMode::Effect
+        if request.effect == ToolEffect::Read
+            && request.permission_mode == ToolPermissionMode::Effect
         {
             AuthorizationDecision::Allow
         } else {

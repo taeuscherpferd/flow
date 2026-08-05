@@ -5,11 +5,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use flowmation_domain::chat::{JsonSchema, JsonSchemaProperty, JsonSchemaType, JsonValueType};
 use flowmation_domain::schema::{WorkflowSchema, validate_schema};
+use flowmation_domain::tool::{ToolEffect, ToolPermissionMode, ToolResult};
 use flowmation_workflow_host::protocol::AgentInvocationPolicy;
 use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
-use crate::tool::{Tool, ToolEffect, ToolExecutionContext, ToolPermissionMode, ToolResult};
+use crate::tool::{Tool, ToolExecutionContext};
 use crate::workflow::WorkflowRecord;
 
 #[derive(Clone, Debug, PartialEq)]

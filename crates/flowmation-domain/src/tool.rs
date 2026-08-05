@@ -24,6 +24,24 @@ pub struct ToolResult {
     pub content: String,
 }
 
+impl ToolResult {
+    #[must_use]
+    pub fn success(content: impl Into<String>) -> Self {
+        Self {
+            ok: true,
+            content: content.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn failure(content: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            content: content.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ToolEffect, ToolPermissionMode};

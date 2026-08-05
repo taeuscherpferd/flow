@@ -8,29 +8,12 @@ use flowmation_domain::chat::{
     FunctionDefinition, JsonSchema, JsonSchemaProperty, JsonSchemaType, JsonValueType,
     ToolDefinition, ToolDefinitionKind,
 };
+use flowmation_domain::tool::{ToolEffect, ToolPermissionMode, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::policy::{AuthorizationDecision, AuthorizationPolicy, PermissionRequest};
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ToolEffect {
-    Read,
-    Write,
-    Command,
-    External,
-    Schedule,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ToolPermissionMode {
-    #[default]
-    Effect,
-    SelfManaged,
-}
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -66,30 +49,6 @@ pub struct ToolExecutionContext {
     pub secrets: Arc<dyn SecretsProvider>,
     pub execution_mode: ExecutionMode,
     pub cancellation: CancellationToken,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ToolResult {
-    pub ok: bool,
-    pub content: String,
-}
-
-impl ToolResult {
-    #[must_use]
-    pub fn success(content: impl Into<String>) -> Self {
-        Self {
-            ok: true,
-            content: content.into(),
-        }
-    }
-
-    #[must_use]
-    pub fn failure(content: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            content: content.into(),
-        }
-    }
 }
 
 #[async_trait]
