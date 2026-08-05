@@ -15,7 +15,7 @@ pub mod tool;
 pub mod workflow;
 pub mod workflow_tool;
 
-pub use agent::{AgentError, AgentService, AgentSession, AgentTurnOptions};
+pub use agent::{AgentActivity, AgentError, AgentService, AgentSession, AgentTurnOptions};
 pub use builtin_tools::{ReadFileTool, RunCommandTool, WriteFileTool};
 pub use config::{ConfigService, ConfigServiceError, ModelSetup};
 pub use events::{

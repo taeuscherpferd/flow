@@ -5,6 +5,7 @@ mod model_setup;
 mod permission_prompt;
 mod provider_factory;
 mod schedule_commands;
+mod skill_usage;
 mod spinner;
 mod worker;
 mod workflow_commands;
@@ -21,7 +22,7 @@ use clap::{Parser, Subcommand};
 use flowmation_application::scheduling::ScheduleRepository;
 use flowmation_application::{
     AgentManager, AuthorizationDecision, AuthorizationPolicy, ConfigService, CreateScheduleTool,
-    FixedPermissionBroker, HumanRequestBroker, ManagedWorkflowAgentRuntime,
+    AgentActivity, FixedPermissionBroker, HumanRequestBroker, ManagedWorkflowAgentRuntime,
     StandardAuthorizationPolicy, WorkflowAgentRuntime, WorkflowCallbackServices,
     WorkflowConfirmation, WorkflowDurability, WorkflowLogSink, WorkflowRegistry,
     WorkflowRegistryRoot, WorkflowRunner, WorkflowToolRuntime,
@@ -48,6 +49,7 @@ use crate::command::{BUILTIN_COMMANDS, HELP_TEXT, ReplCommand, parse_repl_line};
 use crate::model_setup::{ModelSetupIo, ModelSetupResult, ModelSetupService, format_openai_model};
 use crate::provider_factory::create_model_providers;
 use crate::schedule_commands::{CliScheduleContext, CliScheduleRuntime};
+use crate::skill_usage::SkillUsageTracker;
 use crate::spinner::Spinner;
 use crate::workflow_commands::WorkflowRunScope;
 
@@ -701,13 +703,44 @@ async fn repl_prompt_context(
 }
 
 async fn respond_to_user(manager: &mut AgentManager, message: &str) -> Result<String, String> {
-    let spinner = Spinner::start("");
-    let response = manager
-        .handle_user_message(message, &CancellationToken::new())
-        .await
-        .map_err(|error| error.to_string());
+    let mut activities = manager.subscribe_activity();
+    let mut spinner = Spinner::start("");
+    let mut skill_usage = SkillUsageTracker::default();
+    let cancellation = CancellationToken::new();
+    let response = manager.handle_user_message(message, &cancellation);
+    tokio::pin!(response);
+    let mut listening = true;
+    let response = loop {
+        tokio::select! {
+            biased;
+            activity = activities.recv(), if listening => {
+                match activity {
+                    Ok(activity) => update_skill_usage(&mut skill_usage, &mut spinner, activity),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_count)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => listening = false,
+                }
+            }
+            result = &mut response => break result.map_err(|error| error.to_string()),
+        }
+    };
+    while let Ok(activity) = activities.try_recv() {
+        update_skill_usage(&mut skill_usage, &mut spinner, activity);
+    }
     spinner.stop().await;
+    if let Some(summary) = skill_usage.summary() {
+        println!("{summary}");
+    }
     response
+}
+
+fn update_skill_usage(
+    skill_usage: &mut SkillUsageTracker,
+    spinner: &mut Spinner,
+    activity: AgentActivity,
+) {
+    if let Some(label) = skill_usage.observe(activity) {
+        spinner.set_label(&label);
+    }
 }
 
 async fn run_workflow_command(runtime: &mut Runtime, command: &str) -> Result<bool, String> {

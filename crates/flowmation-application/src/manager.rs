@@ -34,6 +34,7 @@ use flowmation_workflow_host::protocol::{
     WorkflowThinking, WorkflowTools,
 };
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::broadcast;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredConversation {
@@ -308,6 +309,11 @@ impl AgentManager {
             .await?;
         self.persist_active()?;
         Ok(result)
+    }
+
+    #[must_use]
+    pub fn subscribe_activity(&self) -> broadcast::Receiver<crate::agent::AgentActivity> {
+        self.active.service.subscribe_activity()
     }
 
     pub async fn present_workflow_result(

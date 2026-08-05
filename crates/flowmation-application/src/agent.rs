@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use serde_json::{Map, Value};
 use thiserror::Error;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -23,6 +25,15 @@ pub struct AgentTurnOptions {
     pub thinking: Option<ThinkingMode>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum AgentActivity {
+    ToolCompleted {
+        tool_name: String,
+        arguments: Map<String, Value>,
+        succeeded: bool,
+    },
+}
+
 #[derive(Debug, Error)]
 pub enum AgentError {
     #[error("agent turn was cancelled")]
@@ -38,6 +49,7 @@ pub struct AgentService {
     tools: Arc<ToolRegistry>,
     history: Vec<ChatMessage>,
     tool_context: ToolExecutionContext,
+    activities: broadcast::Sender<AgentActivity>,
 }
 
 impl AgentService {
@@ -50,6 +62,7 @@ impl AgentService {
         system_prompt: impl Into<String>,
         tool_context: ToolExecutionContext,
     ) -> Self {
+        let (activities, _receiver) = broadcast::channel(64);
         Self {
             provider,
             model: model.into(),
@@ -57,6 +70,7 @@ impl AgentService {
             tools,
             history: vec![ChatMessage::new(ChatRole::System, system_prompt)],
             tool_context,
+            activities,
         }
     }
 
@@ -69,6 +83,7 @@ impl AgentService {
         history: Vec<ChatMessage>,
         tool_context: ToolExecutionContext,
     ) -> Self {
+        let (activities, _receiver) = broadcast::channel(64);
         Self {
             provider,
             model: model.into(),
@@ -76,6 +91,7 @@ impl AgentService {
             tools,
             history,
             tool_context,
+            activities,
         }
     }
 
@@ -97,6 +113,11 @@ impl AgentService {
 
     pub fn register_direct_tool(&mut self, tool: Arc<dyn crate::tool::Tool>) {
         Arc::make_mut(&mut self.tools).register(tool);
+    }
+
+    #[must_use]
+    pub fn subscribe_activity(&self) -> broadcast::Receiver<AgentActivity> {
+        self.activities.subscribe()
     }
 
     #[must_use]
@@ -183,22 +204,29 @@ impl AgentService {
                 if cancellation.is_cancelled() {
                     return Err(AgentError::Cancelled);
                 }
+                let tool_name = call.name;
+                let arguments = call.arguments;
                 let mut tool_context = self.tool_context.clone();
                 tool_context.cancellation = cancellation.child_token();
                 let result = self
                     .tools
-                    .execute(&call.name, call.arguments, &tool_context)
+                    .execute(&tool_name, arguments.clone(), &tool_context)
                     .await;
                 if cancellation.is_cancelled() {
                     return Err(AgentError::Cancelled);
                 }
+                let _subscriber_count = self.activities.send(AgentActivity::ToolCompleted {
+                    tool_name: tool_name.clone(),
+                    arguments,
+                    succeeded: result.ok,
+                });
                 self.history.push(ChatMessage {
                     role: ChatRole::Tool,
                     content: result.content,
                     thinking: None,
                     tool_calls: Vec::new(),
                     tool_call_id: Some(call.id),
-                    tool_name: Some(call.name),
+                    tool_name: Some(tool_name),
                 });
             }
         }
@@ -368,7 +396,9 @@ mod tests {
     use serde_json::Map;
     use tokio::sync::Notify;
 
-    use super::{AgentError, AgentService, AgentSession, AgentTools, AgentTurnOptions};
+    use super::{
+        AgentActivity, AgentError, AgentService, AgentSession, AgentTools, AgentTurnOptions,
+    };
     use crate::policy::{
         AuthorizationDecision, FixedPermissionBroker, StandardAuthorizationPolicy,
     };
@@ -559,6 +589,57 @@ mod tests {
             .map_err(|error| error.to_string())?;
         assert!(!requests[0].tools.is_empty());
         assert_eq!(requests[0].options.thinking, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reports_completed_tool_activity() -> Result<(), Box<dyn std::error::Error>> {
+        let mut arguments = Map::new();
+        arguments.insert(
+            "text".to_owned(),
+            serde_json::Value::String("tool output".to_owned()),
+        );
+        let provider = Arc::new(RecordingProvider {
+            requests: Mutex::new(Vec::new()),
+            responses: Mutex::new(VecDeque::from([
+                ChatCompletionResult {
+                    message: ChatMessage {
+                        role: ChatRole::Assistant,
+                        content: String::new(),
+                        thinking: None,
+                        tool_calls: vec![ToolCall {
+                            id: "call-1".to_owned(),
+                            name: "echo".to_owned(),
+                            arguments: arguments.clone(),
+                        }],
+                        tool_call_id: None,
+                        tool_name: None,
+                    },
+                },
+                ChatCompletionResult {
+                    message: ChatMessage::new(ChatRole::Assistant, "complete"),
+                },
+            ])),
+        });
+        let mut service = service(provider);
+        let mut activities = service.subscribe_activity();
+
+        service
+            .handle_user_message(
+                "Use a tool",
+                AgentTurnOptions::default(),
+                &CancellationToken::new(),
+            )
+            .await?;
+
+        assert_eq!(
+            activities.recv().await?,
+            AgentActivity::ToolCompleted {
+                tool_name: "echo".to_owned(),
+                arguments,
+                succeeded: true,
+            }
+        );
         Ok(())
     }
 

@@ -331,7 +331,9 @@ editor uses Crossterm on Linux, macOS, and Windows. It supports cursor movement,
 deletion, persistent history navigation, wrapped-row redraw, dimmed
 slash-command completion, and the two-stage Ctrl+C behavior. Press Tab or Right
 Arrow at the end of the input to accept the suggested built-in, workflow, or
-skill command. Non-TTY stdin uses line-oriented input.
+skill command. When the agent loads a skill during a normal turn, the spinner
+names that skill and the CLI prints a persistent `Used skill` summary before the
+answer. Non-TTY stdin uses line-oriented input.
 
 The coordinator and specialists whose tool policy includes `create_schedule`
 can create confirmed cron or one-shot workflow schedules with the model tool.

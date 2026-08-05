@@ -1,4 +1,5 @@
 use std::io::{self, IsTerminal, Write};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::task::JoinHandle;
@@ -18,6 +19,7 @@ pub struct Spinner {
 struct ActiveSpinner {
     cancellation: CancellationToken,
     task: JoinHandle<()>,
+    label: Arc<Mutex<String>>,
 }
 
 impl Spinner {
@@ -31,13 +33,17 @@ impl Spinner {
         write_stderr(HIDE_CURSOR);
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
-        let label = label.to_owned();
+        let label = Arc::new(Mutex::new(label.to_owned()));
+        let task_label = Arc::clone(&label);
         let task = tokio::spawn(async move {
             let mut frame_index = 0;
             loop {
                 tokio::select! {
                     () = task_cancellation.cancelled() => break,
                     () = tokio::time::sleep(FRAME_INTERVAL) => {
+                        let label = task_label
+                            .lock()
+                            .map_or_else(|poisoned| poisoned.into_inner().clone(), |label| label.clone());
                         write_stderr(&frame_text(FRAMES[frame_index % FRAMES.len()], &label));
                         frame_index += 1;
                     }
@@ -45,7 +51,24 @@ impl Spinner {
             }
         });
         Self {
-            active: Some(ActiveSpinner { cancellation, task }),
+            active: Some(ActiveSpinner {
+                cancellation,
+                task,
+                label,
+            }),
+        }
+    }
+
+    pub fn set_label(&mut self, label: &str) {
+        let Some(active) = &self.active else {
+            return;
+        };
+        match active.label.lock() {
+            Ok(mut current) => label.clone_into(&mut current),
+            Err(poisoned) => {
+                let mut current = poisoned.into_inner();
+                label.clone_into(&mut current);
+            }
         }
     }
 

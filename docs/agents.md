@@ -85,7 +85,9 @@ inserted.
 Agent-local skills are discovered under `skills/<name>/SKILL.md`. The
 frontmatter name must be lowercase kebab-case and match its directory. Metadata
 appears in the system prompt, while the body is loaded only through
-`/<skill-name>` or `load_skill`.
+`/<skill-name>` or `load_skill`. Explicit slash-command loads print `Loaded
+skill`, while successful model-initiated loads are shown in the active spinner
+and summarized as `Used skill` before the agent's answer.
 
 The coordinator embeds `create-skill`, `create-workflow`, and `create-schedule`
 authoring skills. A specialist whose tool policy includes `create_schedule`
